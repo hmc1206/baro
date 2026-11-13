@@ -1,0 +1,58 @@
+/* 창 자체는 투명, macOS 블러(vibrancy) 위에 반투명 틴트를 얹음 */
+:root { --bg:rgba(246,247,250,.62); --text:#1B2230; --muted:#6B7385; --accent:#2F6BFF; --sel:rgba(27,34,48,.08);
+  --line:rgba(27,34,48,.10); --pop:rgba(250,251,253,.96); --kbd:rgba(27,34,48,.08); color-scheme: light; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:rgba(24,27,34,.55); --text:#E9ECF2; --muted:#8E96A8; --accent:#6E95FF; --sel:rgba(255,255,255,.09);
+    --line:rgba(255,255,255,.08); --pop:rgba(36,40,50,.97); --kbd:rgba(255,255,255,.10); color-scheme: dark; }
+}
+* { box-sizing: border-box; margin: 0; }
+html, body, #root { height: 100%; background: transparent; }
+body { color: var(--text); font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", Pretendard, "Segoe UI", sans-serif;
+  overflow: hidden; -webkit-user-select: none; user-select: none; cursor: default; }
+.panel { position: relative; display: flex; flex-direction: column; height: 100%; background: var(--bg);
+  border-radius: 12px; border: 1px solid var(--line); overflow: hidden; }
+.search { font: inherit; font-size: 20px; padding: 18px 20px; border: 0; border-bottom: 1px solid var(--line);
+  background: transparent; color: var(--text); outline: none; }
+.search::placeholder { color: var(--muted); }
+.list { list-style: none; padding: 6px; flex: 1; overflow-y: auto; }
+.row { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-radius: 8px; }
+.row.on { background: var(--sel); }
+.icon { width: 24px; height: 24px; flex-shrink: 0; }
+.glyph { display: grid; place-items: center; border-radius: 6px; font-size: 13px; font-weight: 600; color: #fff; background: #7A8296; }
+.glyph.calc { background: #F29A2E; }
+.glyph.web { background: var(--accent); }
+.title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+.empty { color: var(--muted); padding: 14px; }
+.foot { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px;
+  padding: 8px 14px; border-top: 1px solid var(--line); }
+.brand { font-weight: 600; }
+.keys { display: flex; align-items: center; gap: 10px; }
+.keys .on { color: var(--text); }
+.sep { width: 1px; height: 12px; background: var(--line); }
+kbd { font: inherit; font-size: 11px; display: inline-block; min-width: 18px; text-align: center; padding: 1px 4px;
+  margin-left: 2px; border-radius: 4px; background: var(--kbd); }
+.menu { position: absolute; right: 10px; bottom: 42px; width: 260px; padding: 6px; border-radius: 10px;
+  background: var(--pop); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.menu-head { color: var(--muted); font-size: 12px; padding: 4px 8px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.act { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-radius: 6px; }
+.act.on { background: var(--sel); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+.glyph.cmd { background: #5B6478; }
+.glyph.link { background: #2BA67A; }
+.glyph.snippet { background: #9B6BDF; }
+.glyph.ai { background: linear-gradient(135deg, #D97757, #B5527A); }
+.warn { color: #E5484D; font-weight: 600; }
+.ai-view { flex: 1; overflow-y: auto; padding: 14px 20px; -webkit-user-select: text; user-select: text; }
+.ai-q { display: flex; align-items: center; gap: 10px; color: var(--muted); margin-bottom: 12px; }
+.ai-a { white-space: pre-wrap; line-height: 1.6; }
+.ai-err { color: #E5484D; }
+.caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--text); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.glyph.ext { background: #C2771F; }
+.glyph.store { background: #3A7BD5; }
+.view-title { font-weight: 600; margin-bottom: 10px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.section { color: var(--muted); font-size: 12px; padding: 6px 10px 4px; }
+.keys > span { display: inline-flex; align-items: center; gap: 4px; }
+.keys .sep { margin-right: 6px; }

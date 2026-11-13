@@ -1,0 +1,7 @@
+{
+  "extensions": [
+    { "id": "dev-tools", "name": "개발 도구", "description": "UUID 생성, Base64 인코딩, 타임스탬프 변환", "version": "1.0.0", "author": "Baro", "path": "dev-tools" },
+    { "id": "system-info", "name": "시스템 정보", "description": "IP 주소, 배터리, 디스크 용량 보기", "version": "1.0.0", "author": "Baro", "path": "system-info" },
+    { "id": "text-tools", "name": "텍스트 도구", "description": "대소문자 변환, 글자 수 세기", "version": "1.0.0", "author": "Baro", "path": "text-tools" }
+  ]
+}

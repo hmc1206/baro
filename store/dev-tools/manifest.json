@@ -1,0 +1,8 @@
+{
+  "id": "dev-tools", "name": "개발 도구", "description": "UUID 생성, Base64 인코딩, 타임스탬프 변환", "version": "1.0.0", "author": "Baro",
+  "commands": [
+    { "name": "uuid", "title": "UUID 생성", "keywords": "uuid guid 아이디", "mode": "copy", "script": "uuid.sh" },
+    { "name": "b64", "title": "Base64 인코딩", "keyword": "b64", "keywords": "base64 인코딩", "mode": "copy", "script": "b64.sh" },
+    { "name": "ts", "title": "타임스탬프 변환", "keyword": "ts", "keywords": "timestamp unix epoch 시간", "mode": "view", "script": "ts.sh" }
+  ]
+}

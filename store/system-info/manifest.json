@@ -1,0 +1,8 @@
+{
+  "id": "system-info", "name": "시스템 정보", "description": "IP 주소, 배터리, 디스크 용량 보기", "version": "1.0.0", "author": "Baro",
+  "commands": [
+    { "name": "ip", "title": "내 IP 주소", "keywords": "ip address network 네트워크 아이피", "mode": "view", "script": "ip.sh" },
+    { "name": "battery", "title": "배터리 상태", "keywords": "battery power 배터리 전원", "mode": "view", "script": "battery.sh" },
+    { "name": "disk", "title": "디스크 용량", "keywords": "disk storage 디스크 저장 용량", "mode": "view", "script": "disk.sh" }
+  ]
+}
