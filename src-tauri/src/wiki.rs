@@ -72,6 +72,51 @@ pub fn save_ai(dir: &str, date: &str, question: &str, answer: &str, model: &str)
     Err("같은 이름의 노트가 너무 많아요.".into())
 }
 
+// 노트 검색 폴더 안의 파일인지 확인 (다른 위치의 파일은 고치지 않음)
+fn inside(dir: &str, file: &str) -> Result<std::path::PathBuf, String> {
+    let d = Path::new(dir).canonicalize().map_err(|e| format!("폴더를 찾을 수 없어요: {e}"))?;
+    let f = Path::new(file).canonicalize().map_err(|e| format!("노트를 찾을 수 없어요: {e}"))?;
+    if !f.starts_with(&d) || f.extension().and_then(|e| e.to_str()) != Some("md") { return Err("노트 검색 폴더 밖의 파일은 고칠 수 없어요.".into()); }
+    Ok(f)
+}
+
+// YAML 큰따옴표 문자열 ("와 \는 이스케이프)
+fn yaml_quote(v: &str) -> String { format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"")) }
+
+// 노트 머리말의 key 값만 바꿈. 없으면 머리말 끝에 추가. 본문은 그대로
+pub fn set_field(dir: &str, file: &str, key: &str, value: &str) -> Result<(), String> {
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_lowercase() || c == '_') { return Err("잘못된 항목 이름".into()); }
+    if value.contains('\n') || value.contains('\r') { return Err("값에 줄바꿈은 넣을 수 없어요.".into()); }
+    let f = inside(dir, file)?;
+    let text = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
+    if !text.starts_with("---\n") { return Err("노트에 머리말(---)이 없어요.".into()); }
+    let end = text[4..].find("\n---").map(|i| i + 4).ok_or("머리말 끝(---)을 찾지 못했어요.")?;
+    let (head, rest) = text.split_at(end);
+    let line = format!("{key}: {}", yaml_quote(value));
+    let mut found = false;
+    let mut lines: Vec<String> = head.split('\n').map(|l| {
+        if !found && l.strip_prefix(key).is_some_and(|r| r.starts_with(':')) { found = true; line.clone() } else { l.to_string() }
+    }).collect();
+    if !found { lines.push(line); }
+    let out = format!("{}{}", lines.join("\n"), rest);
+    // 임시 파일에 쓰고 바꿔치기 (쓰는 도중 끊겨도 원본이 깨지지 않게)
+    let tmp = f.with_extension("md.baro-tmp");
+    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &f).map_err(|e| e.to_string())
+}
+
+// 노트 검색 폴더에 새 노트 만들기 (같은 이름이 있으면 실패, 덮어쓰지 않음)
+pub fn create(dir: &str, name: &str, content: &str) -> Result<String, String> {
+    let name = name.trim().trim_end_matches(".md");
+    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\', ':']) { return Err("파일 이름에 / \\ : 는 쓸 수 없어요.".into()); }
+    let p = Path::new(dir).join(format!("{name}.md"));
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&p)
+        .map_err(|e| if e.kind() == std::io::ErrorKind::AlreadyExists { format!("이미 있는 노트예요: {name}.md") } else { e.to_string() })?;
+    f.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(p.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -84,6 +129,24 @@ mod tests {
         assert!(b.ends_with("2026-11-15-ls-옵션-뜻이-뭐야-2.md"), "{b}");
         let t = std::fs::read_to_string(&a).unwrap();
         assert!(t.starts_with("---\ncreated: 2026-11-15\n") && t.contains("## 답변\n답변\n"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn set_field_and_create() {
+        let dir = std::env::temp_dir().join(format!("baro-pw-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_string_lossy().to_string();
+        let f = super::create(&d, "Level-01", "---\nlevel: 1\npassword: \"old\"\n---\n\n# L1\npassword: body\n").unwrap();
+        assert!(super::create(&d, "Level-01", "x").is_err(), "덮어쓰면 안 됨");
+        super::set_field(&d, &f, "password", "n\"e\\w").unwrap();
+        super::set_field(&d, &f, "key_file", "a.key").unwrap();
+        let t = std::fs::read_to_string(&f).unwrap();
+        assert_eq!(t, "---\nlevel: 1\npassword: \"n\\\"e\\\\w\"\nkey_file: \"a.key\"\n---\n\n# L1\npassword: body\n");
+        // 폴더 밖 파일·이상한 이름 거부
+        assert!(super::set_field(&d, "/etc/hosts", "password", "x").is_err());
+        assert!(super::create(&d, "../x", "x").is_err());
+        assert!(super::set_field(&d, &f, "password", "a\nb").is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

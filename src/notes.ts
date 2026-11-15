@@ -2,20 +2,23 @@
 //  commands: 명령어 사전 (Raycast linux-wiki 확장의 docs.ts를 옮겨 옴) — 머리말 command/category/aliases/summary + 예시
 //  notes:    일반 노트 — 제목·태그·본문 검색, 코드 블록을 예시로
 //  snippets: 스니펫 모음 — 노트 하나 = 붙여넣을 문구 하나
+//  passwords: 비밀번호 모음 — 노트 하나 = 계정 하나. 머리말 password(·login·ssh·key_file)를 가려서 보여 주고 수정
 import { invoke } from "@tauri-apps/api/core";
 
-export type NoteKind = "commands" | "notes" | "snippets";
+export type NoteKind = "commands" | "notes" | "snippets" | "passwords";
 export type NoteSearch = { id: string; name: string; dir: string; kind: NoteKind };
 export const KIND_LABELS: Record<NoteKind, { title: string; desc: string; glyph: string }> = {
   commands: { title: "명령어 사전", desc: "머리말(command·category·aliases·summary)과 예시 표·코드를 읽어 예시를 바로 붙여넣기", glyph: "terminal" },
   notes: { title: "일반 노트", desc: "제목·태그·본문으로 찾고 미리보기, 코드 블록은 복사·붙여넣기", glyph: "doc" },
   snippets: { title: "스니펫 모음", desc: "노트 하나가 문구 하나. 고르면 본문을 바로 붙여넣기", glyph: "snippet" },
+  passwords: { title: "비밀번호 모음", desc: "머리말 password를 가려서 보여 주고 복사·붙여넣기·수정, 새 노트 추가", glyph: "lock" },
 };
 
 export type Example = { cmd: string; desc: string };
 export type Doc = {
   name: string; category: string; summary: string; aliases: string[]; related: string[];
   markdown: string; body: string; examples: Example[]; file: string; stub: boolean;
+  meta: Record<string, string>; // 머리말의 한 줄 값 (비밀번호 모음: password, login, ssh, key_file …)
 };
 type Note = { file: string; folder: string; text: string };
 
@@ -26,7 +29,12 @@ const CATEGORY_ORDER = [
 ];
 
 const unesc = (s: string) => s.replace(/\\\|/g, "|");
-const unquote = (s: string) => s.trim().replace(/^(["'])(.*)\1$/, "$2");
+// 따옴표 벗기기. 큰따옴표는 \" \\ 이스케이프도 풂 (Baro가 비밀번호를 저장할 때 쓰는 형식)
+const unquote = (s: string) => {
+  const t = s.trim();
+  if (/^"(.*)"$/.test(t)) return t.slice(1, -1).replace(/\\(["\\])/g, "$1");
+  return t.replace(/^'(.*)'$/, "$1");
+};
 const stripLink = (s: string) => s.replace(/^\[\[|\]\]$/g, "").split("|")[0].split("/").pop() ?? s;
 const baseName = (file: string) => file.split("/").pop()!.replace(/\.md$/, "");
 
@@ -115,7 +123,15 @@ export async function loadDocs(search: NoteSearch): Promise<Doc[]> {
       return {
         name: String(data.command ?? baseName(n.file)), category: String(data.category ?? "기타 유용한 명령어"),
         summary: String(data.summary ?? ""), aliases: toList(data.aliases), related: toList(data.related).map(stripLink),
-        markdown: toMarkdown(text, chapters), body: text, examples: commandExamples(body), file: n.file, stub: level === "stub",
+        markdown: toMarkdown(text, chapters), body: text, examples: commandExamples(body), file: n.file, stub: level === "stub", meta: {},
+      };
+    }
+    const meta = Object.fromEntries(Object.entries(data).filter(([, v]) => typeof v === "string")) as Record<string, string>;
+    if (search.kind === "passwords") {
+      return {
+        name: heading ?? baseName(n.file), category: n.folder || search.name, aliases: toList(data.tags), related: [],
+        summary: meta.key_file ? `키 파일 ${meta.key_file}` : meta.login ?? "",
+        markdown: toMarkdown(text, chapters), body: text, examples: [], file: n.file, stub: false, meta,
       };
     }
     const name = String(data.title ?? (search.kind === "notes" ? heading : undefined) ?? baseName(n.file));
@@ -128,7 +144,7 @@ export async function loadDocs(search: NoteSearch): Promise<Doc[]> {
       aliases, related: toList(data.related).map(stripLink),
       markdown: toMarkdown(search.kind === "snippets" ? snippet : text, chapters),
       body: search.kind === "snippets" ? snippet : text,
-      examples: search.kind === "notes" ? codeBlocks(text) : [], file: n.file, stub: false,
+      examples: search.kind === "notes" ? codeBlocks(text) : [], file: n.file, stub: false, meta,
     };
   });
 }
@@ -160,12 +176,12 @@ export function score(d: Doc, query: string): number {
 
 export function rank(docs: Doc[], query: string): Doc[] {
   return docs.map(d => ({ d, s: score(d, query) })).filter(x => x.s > 0)
-    .sort((a, b) => b.s - a.s || a.d.name.localeCompare(b.d.name)).map(x => x.d);
+    .sort((a, b) => b.s - a.s || a.d.name.localeCompare(b.d.name, undefined, { numeric: true })).map(x => x.d);
 }
 
 // 검색어가 없을 때: 분류(명령어 사전은 정해진 순서, 그 외는 폴더 이름순) → 상세 문서 먼저 → 이름순
 export function byCategory(docs: Doc[]): Doc[] {
   const order = (c: string) => { const i = CATEGORY_ORDER.indexOf(c); return i < 0 ? CATEGORY_ORDER.length : i; };
   return [...docs].sort((a, b) => order(a.category) - order(b.category) || a.category.localeCompare(b.category)
-    || Number(a.stub) - Number(b.stub) || a.name.localeCompare(b.name));
+    || Number(a.stub) - Number(b.stub) || a.name.localeCompare(b.name, undefined, { numeric: true }));
 }

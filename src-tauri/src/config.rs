@@ -10,11 +10,11 @@ pub struct Quicklink { pub keyword: String, pub name: String, pub url: String }
 pub struct Snippet { pub keyword: String, pub name: String, pub text: String }
 
 // 사용자가 만드는 노트 검색: Obsidian 폴더 하나를 정해진 방식으로 검색
-// kind: "commands"(명령어 사전) | "notes"(일반 노트) | "snippets"(스니펫 모음)
+// kind: "commands"(명령어 사전) | "notes"(일반 노트) | "snippets"(스니펫 모음) | "passwords"(비밀번호 모음: 머리말 password)
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NoteSearch { pub id: String, pub name: String, pub dir: String, pub kind: String }
 
-pub const NOTE_KINDS: &[&str] = &["commands", "notes", "snippets"];
+pub const NOTE_KINDS: &[&str] = &["commands", "notes", "snippets", "passwords"];
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]

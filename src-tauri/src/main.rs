@@ -370,6 +370,23 @@ async fn notes_load(id: String, app: AppHandle) -> Result<wiki::Notes, String> {
     tauri::async_runtime::spawn_blocking(move || wiki::load(&s.dir, &s.kind)).await.map_err(|e| e.to_string())?
 }
 
+fn note_dir(app: &AppHandle, id: &str) -> Result<String, String> {
+    let c = config::load(&config_file(app))?;
+    c.note_searches.into_iter().find(|n| n.id == id).map(|n| n.dir).ok_or("노트 검색을 찾지 못했어요.".into())
+}
+
+// 노트 머리말 값 바꾸기 (비밀번호 모음의 비밀번호 수정 등). 해당 노트 검색 폴더 안의 파일만
+#[tauri::command]
+fn note_set_field(id: String, file: String, key: String, value: String, app: AppHandle) -> Result<(), String> {
+    wiki::set_field(&note_dir(&app, &id)?, &file, &key, &value)
+}
+
+// 노트 검색 폴더에 새 노트 만들기
+#[tauri::command]
+fn note_create(id: String, name: String, content: String, app: AppHandle) -> Result<String, String> {
+    wiki::create(&note_dir(&app, &id)?, &name, &content)
+}
+
 // 노트 검색 추가·수정. id가 비어 있으면 새로 만듦. 저장한 id를 돌려줌
 #[tauri::command]
 fn save_note_search(mut search: config::NoteSearch, hotkey: String, app: AppHandle) -> Result<String, String> {
@@ -494,7 +511,7 @@ fn main() {
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, save_note_search, delete_note_search, pick_folder,
+            notes_load, note_set_field, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed])
         .run(tauri::generate_context!())
         .expect("Baro 실행 실패");

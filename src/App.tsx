@@ -74,8 +74,39 @@ type Notes = { search: NoteSearch | null; docs: Doc[]; loading: boolean; error: 
 // 노트 검색 추가·수정 화면의 입력값
 type Draft = { id: string; name: string; dir: string; kind: NoteKind; hotkey: string; recording: boolean; error: string | null; saving: boolean };
 type Hk = { keys: Record<string, string>; recording: string | null; error: string | null };
+// 비밀번호 모음: 수정(doc 있음) 또는 새 노트 추가(doc 없음)
+type PwDraft = { doc: Doc | null; name: string; title: string; password: string; error: string | null; saving: boolean };
+const MASK = "••••••••";
+const lastDoc = (docs: Doc[]) => { const d = byCategory(docs); return d[d.length - 1]; };
+const yamlQuote = (v: string) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const baseOf = (file: string) => file.split("/").pop()!.replace(/\.md$/, "");
+// 새 노트 이름 제안: 마지막 노트 이름의 끝 숫자 + 1 (자릿수 유지). 예: Bandit-Level-23 → Bandit-Level-24
+function nextName(last?: Doc) {
+  const b = last ? baseOf(last.file) : "새-항목-1";
+  const m = b.match(/^(.*?)(\d+)$/);
+  return m ? m[1] + String(Number(m[2]) + 1).padStart(m[2].length, "0") : `${b}-2`;
+}
+// 새 노트 내용: 마지막 노트의 머리말을 이어받아 번호만 바꿈 (level·login·ssh 등), 비밀번호는 입력값
+function newPwNote(last: Doc | undefined, name: string, title: string, password: string) {
+  const oldNum = last?.meta.level ?? baseOf(last?.file ?? "").match(/(\d+)$/)?.[1];
+  const newNum = name.match(/(\d+)$/) ? String(Number(name.match(/(\d+)$/)![1])) : undefined;
+  const lines = ["---", `created: ${today()}`];
+  for (const [k, v0] of Object.entries(last?.meta ?? {})) {
+    if (["created", "updated", "password", "key_file"].includes(k)) continue;
+    let v = last?.meta.key_file ? v0.replace(`-i ${last.meta.key_file} `, "") : v0;
+    if (oldNum && newNum) v = v.replace(new RegExp(`(?<!\\d)${Number(oldNum)}(?!\\d)`, "g"), newNum);
+    lines.push(`${k}: ${/^[\w.-]+$/.test(v) ? v : yamlQuote(v)}`);
+  }
+  if (last?.aliases.length) lines.push(`tags: [${last.aliases.join(", ")}]`);
+  lines.push(`password: ${yamlQuote(password)}`, "---");
+  const prefix = last ? baseOf(last.file).replace(/\d+$/, "") : "";
+  const keep = [...(last?.body.split(/^## 관련\s*$/m)[1] ?? "").matchAll(/\[\[([^\]|#]+)/g)].map(m => m[1]).filter(l => !prefix || !l.startsWith(prefix));
+  const links = [...new Set([...keep, ...(last ? [baseOf(last.file)] : [])])].map(l => `[[${l}]]`).join(" · ");
+  return `${lines.join("\n")}\n\n# ${title || name}\n\n## 풀이\n- \n\n## 배운 점\n- \n\n## 관련\n${links}\n`;
+}
 // 화면 종류: null(기본 검색) | 확장 스토어 | 노트 검색 | 예시 고르기 | 단축키 설정 | AI 질문 | 노트 검색 관리 | 노트 검색 추가·수정
-type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit";
+type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit";
 
 export default function App() {
   const [q, setQ] = useState("");
@@ -96,6 +127,8 @@ export default function App() {
   const [pinned, setPinned] = useState(false); // 창 고정: 다른 앱을 눌러도 화면에 남음
   const togglePin = () => invoke<boolean>("set_pinned", { on: !pinned }).then(setPinned);
   const [exDoc, setExDoc] = useState<{ doc: Doc; prevQ: string } | null>(null); // 예시 고르기 대상
+  const [reveal, setReveal] = useState(false); // 비밀번호 모음: 비밀번호 보이기 (⌘R)
+  const [pw, setPw] = useState<PwDraft | null>(null);
   const [graph, setGraph] = useState(false); // 노트 검색을 그래프로 보기 (⌘G)
   const [pick, setPick] = useState<Doc | null>(null); // 그래프에서 클릭한 노트
   const [hk, setHk] = useState<Hk>({ keys: {}, recording: null, error: null });
@@ -139,13 +172,35 @@ export default function App() {
     if (!search) search = (await loadConfig()).note_searches.find(n => n.id === id);
     if (!search) return;
     enter("note");
-    setGraph(asGraph); setPick(null);
+    setGraph(asGraph); setPick(null); setReveal(false);
     setNotes(n => ({ search: search!, docs: n.search?.id === id ? n.docs : [], loading: true, error: null }));
     loadDocs(search)
       .then(docs => setNotes({ search: search!, docs, loading: false, error: null }))
       .catch(e => setNotes({ search: search!, docs: [], loading: false, error: String(e) }));
   };
   const openGraph = () => openNotes("__vault", true);
+  // 비밀번호 수정·새 노트 저장 후 노트 다시 읽기
+  const savePw = async () => {
+    const search = notes.search;
+    if (!pw || pw.saving || !search) return;
+    setPw({ ...pw, saving: true, error: null });
+    try {
+      if (pw.doc) await invoke("note_set_field", { id: search.id, file: pw.doc.file, key: "password", value: pw.password });
+      else {
+        if (!pw.name.trim()) throw "파일 이름을 입력하세요.";
+        const last = lastDoc(notes.docs);
+        await invoke("note_create", { id: search.id, name: pw.name.trim(), content: newPwNote(last, pw.name.trim(), pw.title.trim(), pw.password) });
+      }
+      setPw(null);
+      openNotes(search.id);
+    } catch (e) { setPw(d => d && { ...d, saving: false, error: String(e) }); }
+  };
+  const openPw = (doc: Doc | null) => {
+    const last = lastDoc(notes.docs);
+    const name = doc ? baseOf(doc.file) : nextName(last);
+    setPw({ doc, name, title: doc ? doc.name : name.replace(/-/g, " "), password: doc?.meta.password ?? "", error: null, saving: false });
+    setQ(""); setMenu(false); setMode("pwEdit");
+  };
   const openNoteManager = () => {
     enter("noteManage");
     loadConfig().then(() => setRev(r => r + 1));
@@ -188,6 +243,18 @@ export default function App() {
     const kind = notes.search?.kind ?? "notes";
     const obsidian: Action = { title: "Obsidian에서 열기", shortcut: "⌘O",
       run: () => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` }) };
+    if (kind === "passwords") {
+      const p = d.meta.password ?? "", ssh = d.meta.ssh;
+      return { id: `n-${d.file}`, title: d.name, kind: "wiki", glyph: "lock", section: q.trim() ? undefined : d.category,
+        subtitle: p ? (reveal ? p : MASK) : d.meta.key_file ? `키 파일 ${d.meta.key_file}` : "비밀번호 없음",
+        actions: [
+          ...(p ? [{ title: "비밀번호 복사", run: () => copy(p) },
+            { title: "앞 앱에 비밀번호 붙여넣기", shortcut: "⌘↵", run: () => pasteText(p) }] : []),
+          { title: "비밀번호 수정", shortcut: "⌘E", keep: true, run: async () => openPw(d) },
+          ...(ssh ? [{ title: "접속 명령 복사", run: () => copy(ssh) }, { title: "접속 명령 붙여넣기", run: () => pasteText(ssh) }] : []),
+          obsidian,
+        ] };
+    }
     const pick = kind === "commands" ? "예시 골라서 쓰기" : "코드 골라서 쓰기";
     const actions: Action[] = kind === "snippets" ? [
       { title: "앞 앱에 붙여넣기", run: () => pasteText(d.body) },
@@ -249,7 +316,10 @@ export default function App() {
   const home = mode === null && !q.trim();
   const items: Item[] =
     mode === "examples" && exDoc ? exampleItems(exDoc.doc)
-    : mode === "note" ? noteList.map(noteItem)
+    : mode === "note" ? [...noteList.map(noteItem), ...(notes.search?.kind === "passwords" && !notes.loading && !notes.error ? [{
+        id: "pw-new", title: "새 항목 추가", subtitle: `${nextName(lastDoc(notes.docs))} · 비밀번호 입력`, kind: "cmd" as const, glyph: "plus",
+        section: "추가", actions: [{ title: "추가", keep: true, run: async () => openPw(null) }] }] : [])]
+    : mode === "pwEdit" ? []
     : mode === "noteManage" ? manageItems()
     : mode === "noteEdit" ? []
     : mode === "hotkeys" ? hotkeyItems()
@@ -259,7 +329,19 @@ export default function App() {
   const graphOn = mode === "note" && graph;
   const curDoc = mode === "note" ? (graphOn && pick ? pick : noteList[sel]) : undefined;
   const graphMatches = useMemo(() => graphOn && q.trim() ? new Set(noteList.map(d => d.file)) : null, [graphOn, q, noteList]);
-  const previewHtml = useMemo(() => curDoc ? marked.parse(curDoc.markdown, { async: false }) as string : "", [curDoc]);
+  const previewHtml = useMemo(() => {
+    if (!curDoc) return "";
+    let md = curDoc.markdown;
+    // 비밀번호 모음: 맨 위에 비밀번호·접속 명령, 가리기 상태면 본문에 나온 비밀번호도 가림
+    if (notes.search?.kind === "passwords") {
+      const p = curDoc.meta.password ?? "";
+      if (p && !reveal) md = md.split(p).join(MASK);
+      const info = [p ? `**비밀번호** \`${reveal ? p : MASK}\`` : curDoc.meta.key_file ? `**키 파일** \`${curDoc.meta.key_file}\`` : "",
+        curDoc.meta.ssh ? `**접속** \`${curDoc.meta.ssh}\`` : ""].filter(Boolean).join("  \n");
+      if (info) md = `> ${info.replace(/\n/g, "\n> ")}\n\n${md}`;
+    }
+    return marked.parse(md, { async: false }) as string;
+  }, [curDoc, reveal, notes.search?.kind]);
 
   // 단축키로 열렸을 때: 기능에 맞는 화면으로 전환
   const onShown = (action: string) => {
@@ -349,6 +431,12 @@ export default function App() {
       else if (e.key === "Enter" && e.metaKey) { e.preventDefault(); saveDraft(); }
       return;
     }
+    // 비밀번호 수정·추가 화면: Esc(취소)·⌘↵(저장)
+    if (mode === "pwEdit" && pw) {
+      if (e.key === "Escape") { e.preventDefault(); setPw(null); setMode("note"); }
+      else if (e.key === "Enter" && e.metaKey) { e.preventDefault(); savePw(); }
+      return;
+    }
     // 단축키 입력 중: 다음에 누른 조합을 저장
     if (hk.recording) {
       e.preventDefault();
@@ -389,6 +477,8 @@ export default function App() {
       else if (e.key === "Enter") { e.preventDefault(); if (q.trim() && !ai.busy) ask(q.trim()); }
       return;
     }
+    // ⌘R: 비밀번호 보이기·가리기
+    if (mode === "note" && notes.search?.kind === "passwords" && e.metaKey && e.code === "KeyR") { e.preventDefault(); setReveal(v => !v); return; }
     // ⌘G: 노트 목록 ↔ 그래프
     if (mode === "note" && e.metaKey && e.code === "KeyG") { e.preventDefault(); setGraph(v => !v); setPick(null); setMenu(false); return; }
     // ⌘↵, ⌘O 같은 동작별 단축키
@@ -425,6 +515,7 @@ export default function App() {
     : ai ? [["답변 복사", ["⇧", "↵"]], ai.saved ? ["Obsidian에서 열기", ["⌘", "O"]] : ["Obsidian에 저장", ["⌘", "S"]], ["돌아가기", ["esc"]]]
     : hk.recording ? [["취소", ["esc"]]]
     : cur ? [[cur.actions[0].title, ["↵"]], ...(quick ? [[quick.title, [...quick.shortcut!]] as [string, string[]]] : []),
+      ...(mode === "note" && notes.search?.kind === "passwords" ? [[reveal ? "가리기" : "보기", ["⌘", "R"]] as [string, string[]]] : []),
       ...(mode === "note" ? [[graph ? "목록" : "그래프", ["⌘", "G"]] as [string, string[]]] : []), ["액션", ["⌘", "K"]]] : [];
   const placeholder = ai ? "다시 물어보기"
     : mode === "store" ? "확장 검색"
@@ -465,7 +556,7 @@ export default function App() {
       {/* 위쪽 끌기 막대: 잡고 끌면 창이 움직이고, 옮긴 자리는 다음에 열 때도 유지 */}
       <div className="grip" data-tauri-drag-region title="끌어서 창 이동 · 가운데로 되돌리기: '창 위치 초기화'"
         onMouseDown={() => invoke("set_placed", { on: true })}><span data-tauri-drag-region /></div>
-      {mode !== "noteEdit" && <input ref={input} className="search" value={q} autoFocus spellCheck={false} placeholder={placeholder}
+      {mode !== "noteEdit" && mode !== "pwEdit" && <input ref={input} className="search" value={q} autoFocus spellCheck={false} placeholder={placeholder}
         onChange={e => setQ(e.target.value)} />}
       {view ? (
         <section className="ai-view">
@@ -485,6 +576,27 @@ export default function App() {
           {ai.saved && <p className="ai-saved">저장했어요: {ai.saved.replace(/^.*\/MyBrain\//, "")}</p>}
           {ai.saveError && <p className="ai-err">{ai.saveError}</p>}
         </section>
+      ) : mode === "pwEdit" && pw ? (
+        <form className="form" onSubmit={e => { e.preventDefault(); savePw(); }}>
+          <div className="view-title">{pw.doc ? `${pw.doc.name} 비밀번호 수정` : "새 항목 추가"}</div>
+          {!pw.doc && <>
+            <label>파일 이름 <span className="hint">{notes.search?.name} 폴더에 만들어요. 앞 노트의 머리말(level·login·ssh)을 번호만 바꿔 이어받아요</span>
+              <input autoFocus value={pw.name} onChange={e => setPw({ ...pw, name: e.target.value })} />
+            </label>
+            <label>제목
+              <input value={pw.title} placeholder="예: Bandit Level 24 — 쉘 스크립트 작성" onChange={e => setPw({ ...pw, title: e.target.value })} />
+            </label>
+          </>}
+          <label>비밀번호 <span className="hint">노트 머리말 password만 바뀌고 본문은 그대로예요</span>
+            <input autoFocus={!!pw.doc} className="mono" value={pw.password} spellCheck={false} autoComplete="off" onFocus={e => e.target.select()}
+              onChange={e => setPw({ ...pw, password: e.target.value })} />
+          </label>
+          {pw.error && <p className="ai-err">{pw.error}</p>}
+          <div className="form-actions">
+            <button type="button" onClick={() => { setPw(null); setMode("note"); }}>취소 <kbd>esc</kbd></button>
+            <button type="submit" className="primary" disabled={pw.saving}>{pw.saving ? "저장 중…" : "저장"} <kbd>⌘</kbd><kbd>↵</kbd></button>
+          </div>
+        </form>
       ) : mode === "noteEdit" && draft ? (
         <form className="form" onSubmit={e => { e.preventDefault(); saveDraft(); }}>
           <div className="view-title">{draft.id ? "노트 검색 수정" : "새 노트 검색"}</div>
