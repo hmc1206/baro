@@ -8,6 +8,7 @@ import {
 } from "./commands";
 import { loadDocs, rank, byCategory, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
 import { ICONS } from "./icons";
+import { NoteGraph } from "./graph";
 
 function Icon({ it }: { it: Item }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -45,8 +46,10 @@ const PERMS: Record<string, { title: string; body: string }> = {
 
 // 단축키를 지정할 수 있는 기능: 고정 기능(Rust config.rs의 HOTKEY_ACTIONS) + 사용자가 만든 노트 검색
 const hotkeyLabels = (): [string, string][] => [
-  ["baro", "Baro 열기"], ["ai", "AI에게 묻기"], ["store", "확장 스토어"],
+  ["baro", "Baro 열기"], ["ai", "AI에게 묻기"], ["store", "확장 스토어"], ["graph", "노트 그래프 (전체)"],
   ...getConfig().note_searches.map(n => [`note:${n.id}`, n.name] as [string, string]),
+  // 검색어 없는 퀵링크 (예: 아이디어 캔버스 열기). 누르면 Baro 창 없이 바로 열림
+  ...getConfig().quicklinks.filter(l => !l.url.includes("{query}")).map(l => [`link:${l.keyword}`, l.name] as [string, string]),
 ];
 const KEY_NAMES: Record<string, string> = {
   Alt: "⌥", Option: "⌥", Shift: "⇧", Control: "⌃", Ctrl: "⌃", Super: "⌘", Cmd: "⌘", Command: "⌘", Meta: "⌘",
@@ -65,7 +68,7 @@ function accelOf(e: KeyboardEvent) {
   return [...mods, e.code].join("+");
 }
 
-type Ai = { id: number; q: string; text: string; busy: boolean; error: string | null };
+type Ai = { id: number; q: string; text: string; busy: boolean; error: string | null; saved?: string; saveError?: string };
 type Store = { entries: StoreEntry[]; loading: boolean; error: string | null };
 type Notes = { search: NoteSearch | null; docs: Doc[]; loading: boolean; error: string | null };
 // 노트 검색 추가·수정 화면의 입력값
@@ -93,6 +96,8 @@ export default function App() {
   const [pinned, setPinned] = useState(false); // 창 고정: 다른 앱을 눌러도 화면에 남음
   const togglePin = () => invoke<boolean>("set_pinned", { on: !pinned }).then(setPinned);
   const [exDoc, setExDoc] = useState<{ doc: Doc; prevQ: string } | null>(null); // 예시 고르기 대상
+  const [graph, setGraph] = useState(false); // 노트 검색을 그래프로 보기 (⌘G)
+  const [pick, setPick] = useState<Doc | null>(null); // 그래프에서 클릭한 노트
   const [hk, setHk] = useState<Hk>({ keys: {}, recording: null, error: null });
   const aiSeq = useRef(0);
   const input = useRef<HTMLInputElement>(null);
@@ -108,6 +113,18 @@ export default function App() {
     invoke("ask_ai", { id, prompt: question })
       .catch(e => setAi(a => a && a.id === id ? { ...a, busy: false, error: String(e) } : a));
   };
+  // AI 답변을 Obsidian 노트로 저장 (⌘S). 날짜는 내 Mac의 오늘 날짜
+  const saveAi = async () => {
+    if (!ai || ai.busy || !ai.text.trim() || ai.saved) return;
+    const d = new Date();
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const id = ai.id;
+    try {
+      const saved = await invoke<string>("save_ai", { date, question: ai.q, answer: ai.text });
+      setAi(a => a && a.id === id ? { ...a, saved, saveError: undefined } : a);
+      loadConfig().then(() => setRev(r => r + 1));
+    } catch (e) { setAi(a => a && a.id === id ? { ...a, saveError: String(e) } : a); }
+  };
   const enter = (m: Mode) => { setQ(""); setView(null); setAi(null); setMode(m); input.current?.focus(); };
   const openStore = () => {
     enter("store");
@@ -116,16 +133,19 @@ export default function App() {
       .then(entries => setStore({ entries, loading: false, error: null }))
       .catch(e => setStore({ entries: [], loading: false, error: String(e) }));
   };
-  const openNotes = async (id: string) => {
-    let search = getConfig().note_searches.find(n => n.id === id);
+  const openNotes = async (id: string, asGraph = false) => {
+    // "__vault": Obsidian 전체 노트 (그래프용)
+    let search: NoteSearch | undefined = id === "__vault" ? { id, name: "전체 노트", dir: "", kind: "notes" } : getConfig().note_searches.find(n => n.id === id);
     if (!search) search = (await loadConfig()).note_searches.find(n => n.id === id);
     if (!search) return;
     enter("note");
+    setGraph(asGraph); setPick(null);
     setNotes(n => ({ search: search!, docs: n.search?.id === id ? n.docs : [], loading: true, error: null }));
     loadDocs(search)
       .then(docs => setNotes({ search: search!, docs, loading: false, error: null }))
       .catch(e => setNotes({ search: search!, docs: [], loading: false, error: String(e) }));
   };
+  const openGraph = () => openNotes("__vault", true);
   const openNoteManager = () => {
     enter("noteManage");
     loadConfig().then(() => setRev(r => r + 1));
@@ -155,7 +175,7 @@ export default function App() {
   };
   const openExamples = (doc: Doc) => { setExDoc({ doc, prevQ: q }); setQ(""); setMode("examples"); };
   const ui: Ui = {
-    ask, openStore, openNotes, openNoteManager, openHotkeys, togglePin,
+    ask, openStore, openNotes, openGraph, openNoteManager, openHotkeys, togglePin,
     show: v => { setAi(null); setView(v); },
     setQuery: text => { setQ(text); input.current?.focus(); },
   };
@@ -193,6 +213,7 @@ export default function App() {
       subtitle: `${KIND_LABELS[n.kind]?.title ?? n.kind} · ${fmtKey(hk.keys[`note:${n.id}`] ?? "") || "단축키 없음"}`,
       actions: [
         { title: "열기", keep: true, run: async () => openNotes(n.id) },
+        { title: "그래프로 보기", keep: true, run: async () => openNotes(n.id, true) },
         { title: "수정", keep: true, run: async () => openEdit(n) },
         { title: "삭제", keep: true, confirm: `"${n.name}" 노트 검색을 삭제할까요? 노트 파일은 지워지지 않아요. Enter를 한 번 더 누르세요.`,
           run: async () => { await invoke("delete_note_search", { id: n.id }); await loadConfig(); setRev(r => r + 1); } },
@@ -235,7 +256,9 @@ export default function App() {
     : mode === "store" ? storeItems(q, store.entries, () => setRev(r => r + 1), ui)
     : mode === "ask" ? (q.trim() ? [aiItem(q.trim(), ask)] : [])
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
-  const curDoc = mode === "note" ? noteList[sel] : undefined;
+  const graphOn = mode === "note" && graph;
+  const curDoc = mode === "note" ? (graphOn && pick ? pick : noteList[sel]) : undefined;
+  const graphMatches = useMemo(() => graphOn && q.trim() ? new Set(noteList.map(d => d.file)) : null, [graphOn, q, noteList]);
   const previewHtml = useMemo(() => curDoc ? marked.parse(curDoc.markdown, { async: false }) as string : "", [curDoc]);
 
   // 단축키로 열렸을 때: 기능에 맞는 화면으로 전환
@@ -245,6 +268,7 @@ export default function App() {
     if (action.startsWith("note:")) openNotes(action.slice(5));
     else if (action === "store") openStore();
     else if (action === "ai") enter("ask");
+    else if (action === "graph") openGraph();
     else if (mode !== null && mode !== "store" && mode !== "noteEdit") enter(null);
     input.current?.focus(); input.current?.select();
   };
@@ -268,7 +292,7 @@ export default function App() {
   // 기본 검색 결과: 최신 요청 결과만 반영
   useEffect(() => {
     const id = ++seq.current;
-    setSel(0); setMenu(false); setPending(null);
+    setSel(0); setMenu(false); setPending(null); setPick(null);
     if (mode !== null) return;
     query(q, ui).then(r => {
       if (id !== seq.current) return;
@@ -295,7 +319,7 @@ export default function App() {
     setAi(null);
     setView(msg.startsWith("PERM:") ? { kind: "perm", perm: msg.slice(5) } : { kind: "text", title: "실행하지 못했어요", text: msg, error: true });
   };
-  const cur = items[sel];
+  const cur = graphOn && pick ? noteItem(pick) : items[sel];
   const run = (a?: Action, it: Item | undefined = cur) => {
     if (!a || !it) return;
     const key = `${it.id}:${a.title}`;
@@ -306,6 +330,7 @@ export default function App() {
   };
   const back = () => {
     if (mode === "examples") { setMode("note"); setQ(exDoc?.prevQ ?? ""); }
+    else if (graphOn) { setGraph(false); setPick(null); }
     else setMode(null);
   };
 
@@ -358,10 +383,14 @@ export default function App() {
     if (ai) {
       // AI 화면: Enter는 입력한 내용으로 다시 질문, ⇧Enter로 답변 복사
       if (e.key === "Escape") { setAi(null); input.current?.select(); }
+      else if (e.metaKey && e.code === "KeyS") { e.preventDefault(); saveAi(); }
+      else if (e.metaKey && e.code === "KeyO" && ai.saved) { e.preventDefault(); invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(ai.saved)}` }); }
       else if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); navigator.clipboard.writeText(ai.text); }
       else if (e.key === "Enter") { e.preventDefault(); if (q.trim() && !ai.busy) ask(q.trim()); }
       return;
     }
+    // ⌘G: 노트 목록 ↔ 그래프
+    if (mode === "note" && e.metaKey && e.code === "KeyG") { e.preventDefault(); setGraph(v => !v); setPick(null); setMenu(false); return; }
     // ⌘↵, ⌘O 같은 동작별 단축키
     if (e.metaKey && cur && !menu) {
       const sc = e.code === "Enter" ? "⌘↵" : e.code.startsWith("Key") ? `⌘${e.code.slice(3)}` : "";
@@ -370,6 +399,7 @@ export default function App() {
     }
     const n = menu ? cur?.actions.length ?? 0 : items.length;
     const move = menu ? setAsel : setSel;
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !menu && pick) setPick(null);
     if (e.key === "ArrowDown") { e.preventDefault(); setPending(null); move(s => Math.min(s + 1, n - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setPending(null); move(s => Math.max(s - 1, 0)); }
     else if (e.key === "Enter") { e.preventDefault(); run(menu ? cur?.actions[asel] : cur?.actions[0]); }
@@ -392,9 +422,10 @@ export default function App() {
   const quick = cur?.actions.find((a, i) => i > 0 && a.shortcut); // 기본 동작과 겹치면 하단에 두 번 보이지 않게
   const footerKeys: [string, string[]][] = view
     ? [[view.kind === "perm" ? (view.perm === "ok" ? "" : "시스템 설정 열기") : "결과 복사", ["↵"]], ["돌아가기", ["esc"]]]
-    : ai ? [["답변 복사", ["⇧", "↵"]], ["돌아가기", ["esc"]]]
+    : ai ? [["답변 복사", ["⇧", "↵"]], ai.saved ? ["Obsidian에서 열기", ["⌘", "O"]] : ["Obsidian에 저장", ["⌘", "S"]], ["돌아가기", ["esc"]]]
     : hk.recording ? [["취소", ["esc"]]]
-    : cur ? [[cur.actions[0].title, ["↵"]], ...(quick ? [[quick.title, [...quick.shortcut!]] as [string, string[]]] : []), ["액션", ["⌘", "K"]]] : [];
+    : cur ? [[cur.actions[0].title, ["↵"]], ...(quick ? [[quick.title, [...quick.shortcut!]] as [string, string[]]] : []),
+      ...(mode === "note" ? [[graph ? "목록" : "그래프", ["⌘", "G"]] as [string, string[]]] : []), ["액션", ["⌘", "K"]]] : [];
   const placeholder = ai ? "다시 물어보기"
     : mode === "store" ? "확장 검색"
     : mode === "note" ? (notes.search?.kind === "commands" ? "명령어 또는 하고 싶은 작업 (예: 포트 확인, 권한 변경)" : `${notes.search?.name ?? "노트"} 검색`)
@@ -431,6 +462,9 @@ export default function App() {
 
   return (
     <main className="panel">
+      {/* 위쪽 끌기 막대: 잡고 끌면 창이 움직이고, 옮긴 자리는 다음에 열 때도 유지 */}
+      <div className="grip" data-tauri-drag-region title="끌어서 창 이동 · 가운데로 되돌리기: '창 위치 초기화'"
+        onMouseDown={() => invoke("set_placed", { on: true })}><span data-tauri-drag-region /></div>
       {mode !== "noteEdit" && <input ref={input} className="search" value={q} autoFocus spellCheck={false} placeholder={placeholder}
         onChange={e => setQ(e.target.value)} />}
       {view ? (
@@ -448,6 +482,8 @@ export default function App() {
           <div className="ai-q"><span className="icon glyph ai">{(() => { const S = ICONS.ai; return <S size={15} strokeWidth={2.2} />; })()}</span>{ai.q}</div>
           {ai.error ? <p className="ai-err">{ai.error}</p>
             : <p className="ai-a">{ai.text}{ai.busy && <span className="caret" />}</p>}
+          {ai.saved && <p className="ai-saved">저장했어요: {ai.saved.replace(/^.*\/MyBrain\//, "")}</p>}
+          {ai.saveError && <p className="ai-err">{ai.saveError}</p>}
         </section>
       ) : mode === "noteEdit" && draft ? (
         <form className="form" onSubmit={e => { e.preventDefault(); saveDraft(); }}>
@@ -489,6 +525,14 @@ export default function App() {
             <button type="submit" className="primary" disabled={draft.saving}>{draft.saving ? "저장 중…" : "저장"} <kbd>⌘</kbd><kbd>↵</kbd></button>
           </div>
         </form>
+      ) : graphOn ? (
+        // 노트 그래프: 왼쪽 그래프 + 오른쪽 미리보기. 검색어는 맞는 노트만 진하게
+        <div className="split">
+          <NoteGraph docs={notes.docs} matches={graphMatches} selected={curDoc}
+            onSelect={d => { setPick(d); setMenu(false); }}
+            onOpen={d => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` })} />
+          <article className="preview md" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+        </div>
       ) : mode === "note" ? (
         // 노트 검색: 왼쪽 목록 + 오른쪽 노트 미리보기
         <div className="split">

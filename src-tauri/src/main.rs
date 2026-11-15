@@ -24,6 +24,7 @@ struct AppState {
     pinned: Mutex<bool>, // 창 고정: 다른 앱을 눌러도 숨기지 않고 화면 위에 계속 띄움
     prev_bundle: Mutex<Option<String>>, // Baro 직전에 앞에 있던 앱 (고정 중 포커스 돌려주기용)
     pinned_size: Mutex<Option<(f64, f64)>>, // 고정 중에 사용자가 맞춘 창 크기 (다음 고정 때 다시 사용)
+    placed: Mutex<bool>, // 사용자가 끌기 막대로 창을 옮겼으면 다음에 열 때도 그 자리에 띄움
 }
 
 // 창 크기 (논리 픽셀). 고정하면 작게 줄이고 크기 조절을 허용
@@ -59,6 +60,13 @@ fn close(app: &AppHandle) {
 #[tauri::command]
 fn close_window(app: AppHandle) { close(&app); }
 
+// 끌기 막대로 옮기기 시작하면 on=true. on=false면 위치 기억을 지우고 가운데로
+#[tauri::command]
+fn set_placed(on: bool, app: AppHandle, win: WebviewWindow) {
+    *app.state::<AppState>().placed.lock().unwrap() = on;
+    if !on { let _ = win.center(); }
+}
+
 #[tauri::command]
 fn set_pinned(on: bool, app: AppHandle, win: WebviewWindow) -> bool {
     use tauri::LogicalSize;
@@ -78,7 +86,7 @@ fn set_pinned(on: bool, app: AppHandle, win: WebviewWindow) -> bool {
         let _ = win.set_min_size(None::<LogicalSize<f64>>);
         let _ = win.set_size(LogicalSize::new(NORMAL_SIZE.0, NORMAL_SIZE.1));
         let _ = win.set_resizable(false);
-        let _ = win.center();
+        if !*st.placed.lock().unwrap() { let _ = win.center(); }
     }
     on
 }
@@ -248,6 +256,24 @@ async fn ask_ai(id: u32, prompt: String, app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// AI 답변을 Obsidian 노트로 저장. 저장 폴더를 보는 노트 검색이 없으면 "AI 답변" 노트 검색을 만들어 다시 찾을 수 있게 함
+#[tauri::command]
+fn save_ai(date: String, question: String, answer: String, app: AppHandle) -> Result<String, String> {
+    if !date.chars().all(|c| c.is_ascii_digit() || c == '-') { return Err("잘못된 날짜".into()); }
+    let path = config_file(&app);
+    let mut c = config::load(&path)?;
+    let model = if c.ai_provider == "claude" { c.ai_model.clone() } else { c.ollama_model.clone() };
+    let saved = wiki::save_ai(&c.ai_save_dir, &date, &question, &answer, &model)?;
+    let dir = c.ai_save_dir.trim_end_matches('/').to_string();
+    if !c.note_searches.iter().any(|n| n.dir.trim_end_matches('/') == dir) {
+        let id = if c.note_searches.iter().any(|n| n.id == "ai") { format!("ai{}", c.note_searches.len()) } else { "ai".into() };
+        c.note_searches.push(config::NoteSearch { id, name: "AI 답변".into(), dir, kind: "notes".into() });
+        c.hotkeys = config::hotkeys(&c);
+        config::save(&path, &c)?;
+    }
+    Ok(saved)
+}
+
 // 같은 기능의 단축키를 다시 누르면 닫고, 다른 기능이면 그 화면으로 전환
 // 고정 중에 다른 앱을 쓰다가 단축키를 누르면 닫지 않고 Baro로 포커스만 옮김
 fn toggle(w: &WebviewWindow, action: &str) {
@@ -264,8 +290,8 @@ fn toggle(w: &WebviewWindow, action: &str) {
             *st.prev_pid.lock().unwrap() = pid;
             *st.prev_bundle.lock().unwrap() = bundle;
         }
-        // 고정 중에는 사용자가 옮겨 둔 위치를 유지
-        if !visible && !pinned { let _ = w.center(); }
+        // 고정 중이거나 사용자가 옮겨 둔 창은 그 위치를 유지
+        if !visible && !pinned && !*st.placed.lock().unwrap() { let _ = w.center(); }
         let _ = w.show(); let _ = w.set_focus();
     }
     *st.action.lock().unwrap() = action.to_string();
@@ -338,7 +364,9 @@ fn set_hotkey(action: String, accel: String, app: AppHandle) -> Result<std::coll
 #[tauri::command]
 async fn notes_load(id: String, app: AppHandle) -> Result<wiki::Notes, String> {
     let c = config::load(&config_file(&app))?;
-    let s = c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")?;
+    // "__vault": 전체 노트 그래프용. Vault 전체를 일반 노트 방식으로 읽음
+    let s = if id == "__vault" { config::NoteSearch { id, name: String::new(), dir: c.vault_dir.clone(), kind: "notes".into() } }
+        else { c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")? };
     tauri::async_runtime::spawn_blocking(move || wiki::load(&s.dir, &s.kind)).await.map_err(|e| e.to_string())?
 }
 
@@ -411,6 +439,12 @@ fn main() {
             .with_handler(|app, sc, ev| {
                 if ev.state() != ShortcutState::Pressed { return; }
                 let action = app.state::<AppState>().hotkeys.lock().unwrap().get(&sc.id()).cloned();
+                // 퀵링크 단축키는 Baro 창을 띄우지 않고 바로 열기
+                if let Some(kw) = action.as_deref().and_then(|a| a.strip_prefix("link:")) {
+                    let c = config::load(&config_file(app)).unwrap_or_default();
+                    if let Some(l) = c.quicklinks.iter().find(|l| l.keyword == kw) { let _ = open::that_detached(&l.url); }
+                    return;
+                }
                 if let (Some(action), Some(w)) = (action, app.get_webview_window("main")) { toggle(&w, &action); }
             }).build())
         .plugin(tauri_plugin_dialog::init())
@@ -457,11 +491,11 @@ fn main() {
             if *app.state::<AppState>().suspended.lock().unwrap() { register_hotkeys(app); }
         })
         .invoke_handler(tauri::generate_handler![search, icon, launch, open_path, reveal, open_url, hide,
-            files, get_config, open_config, system_cmd, paste, window_layout, ask_ai,
+            files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
             notes_load, save_note_search, delete_note_search, pick_folder,
-            close_window, set_pinned])
+            close_window, set_pinned, set_placed])
         .run(tauri::generate_context!())
         .expect("Baro 실행 실패");
 }

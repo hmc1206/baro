@@ -115,3 +115,14 @@ kbd { font: inherit; font-size: 11px; display: inline-block; min-width: 18px; te
   .kinds { grid-template-columns: 1fr; }
   .form { padding: 12px 14px; }
 }
+.ai-saved { margin-top: 12px; color: var(--muted); font-size: 12px; }
+.graph { position: relative; flex: 0 0 58%; min-width: 0; border-right: 1px solid var(--line); }
+.graph canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.graph-info { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--muted); pointer-events: none; }
+@media (max-width: 600px) { .graph { flex: 0 0 55%; border-right: 0; border-bottom: 1px solid var(--line); } }
+/* 위쪽 끌기 막대 */
+.grip { height: 14px; flex-shrink: 0; display: grid; place-items: center; cursor: grab; }
+.grip span { width: 38px; height: 4px; border-radius: 2px; background: var(--muted); opacity: .45; transition: background .15s; }
+.grip:hover span { opacity: .9; }
+.grip + .search { padding-top: 8px; }
+@media (max-width: 600px) { .grip + .search { padding-top: 4px; } }

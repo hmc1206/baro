@@ -33,10 +33,14 @@ pub struct Config {
     pub note_searches: Vec<NoteSearch>,
     // 기능별 전역 단축키 (예: "Alt+Space"). 노트 검색은 "note:<id>". 빈 값이면 사용 안 함
     pub hotkeys: BTreeMap<String, String>,
+    // AI 답변을 Obsidian 노트로 저장할 폴더 (AI 화면에서 ⌘S)
+    pub ai_save_dir: String,
+    // 전체 노트 그래프로 볼 Obsidian Vault 폴더
+    pub vault_dir: String,
 }
 
 // 고정 기능의 단축키 기본값
-pub const HOTKEY_ACTIONS: &[(&str, &str)] = &[("baro", "Alt+Space"), ("ai", ""), ("store", "")];
+pub const HOTKEY_ACTIONS: &[(&str, &str)] = &[("baro", "Alt+Space"), ("ai", ""), ("store", ""), ("graph", "")];
 
 fn ql(k: &str, n: &str, u: &str) -> Quicklink { Quicklink { keyword: k.into(), name: n.into(), url: u.into() } }
 fn sn(k: &str, n: &str, t: &str) -> Snippet { Snippet { keyword: k.into(), name: n.into(), text: t.into() } }
@@ -65,6 +69,8 @@ impl Default for Config {
                 dir: "/Volumes/Disk/MyBrain/02_Knowledge/Linux/01_명령어".into(),
             }],
             hotkeys: [("note:linux", "Alt+L")].iter().map(|(a, k)| (a.to_string(), k.to_string())).collect(),
+            ai_save_dir: "/Volumes/Disk/MyBrain/00_Inbox/AI".into(),
+            vault_dir: "/Volumes/Disk/MyBrain".into(),
         }
     }
 }
@@ -86,11 +92,12 @@ pub fn save(path: &Path, c: &Config) -> Result<(), String> {
     std::fs::write(path, serde_json::to_vec_pretty(c).unwrap_or_default()).map_err(|e| e.to_string())
 }
 
-// 지금 있는 기능(고정 기능 + 노트 검색)의 단축키. 저장된 값이 없으면 기본값
+// 지금 있는 기능(고정 기능 + 노트 검색 + 검색어 없는 퀵링크)의 단축키. 저장된 값이 없으면 기본값
 pub fn hotkeys(c: &Config) -> BTreeMap<String, String> {
     let fixed = HOTKEY_ACTIONS.iter().map(|(a, k)| (a.to_string(), k.to_string()));
     let notes = c.note_searches.iter().map(|n| (format!("note:{}", n.id), String::new()));
-    fixed.chain(notes)
+    let links = c.quicklinks.iter().filter(|l| !l.url.contains("{query}")).map(|l| (format!("link:{}", l.keyword), String::new()));
+    fixed.chain(notes).chain(links)
         .map(|(a, k)| {
             let v = c.hotkeys.get(&a).cloned()
                 .or_else(|| (a == "note:linux").then(|| c.hotkeys.get("linux_wiki").cloned().unwrap_or_else(|| "Alt+L".into())));
@@ -134,5 +141,15 @@ mod tests {
             assert!(s.parse::<Shortcut>().is_ok(), "{s}");
         }
         assert_eq!("Alt+L".parse::<Shortcut>().unwrap(), "Alt+KeyL".parse::<Shortcut>().unwrap());
+    }
+
+    // 검색어 없는 퀵링크만 단축키 대상
+    #[test]
+    fn quicklinks_without_query_get_hotkeys() {
+        let mut c = super::Config::default();
+        c.quicklinks.push(super::ql("idea", "아이디어 캔버스 열기", "obsidian://open?path=x"));
+        let keys = super::hotkeys(&c);
+        assert!(keys.contains_key("link:idea"));
+        assert!(!keys.contains_key("link:yt"));
     }
 }

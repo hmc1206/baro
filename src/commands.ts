@@ -20,7 +20,7 @@ export type StoreEntry = { id: string; name: string; description: string; versio
 // 목록 밖의 화면: 텍스트 결과, 권한 안내
 export type View = { kind: "text"; title: string; text: string; error?: boolean } | { kind: "perm"; perm: string };
 // 화면(App)이 넘겨주는 동작들
-export type Ui = { ask: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string) => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
+export type Ui = { ask: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
 
 const isMac = navigator.userAgent.includes("Mac");
 let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, note_searches: [], error: null };
@@ -47,7 +47,8 @@ function score(q: string, ...fields: string[]) {
   let best = 0;
   for (const f0 of fields) {
     const f = f0.toLowerCase();
-    if (f.startsWith(s)) best = Math.max(best, 3);
+    // 전체 또는 단어 하나가 검색어로 시작하면 3 ("extension store"의 store)
+    if (f.startsWith(s) || f.split(/\s+/).some(w => w.startsWith(s))) best = Math.max(best, 3);
     else if (f.includes(s)) best = Math.max(best, 2);
     else { let i = 0; for (const c of f) if (c === s[i]) i++; if (i === s.length) best = Math.max(best, 1); }
   }
@@ -86,6 +87,8 @@ const COMMANDS: Cmd[] = [
   { id: "s-mute", title: "소리 끄기·켜기", keys: "mute volume 음소거 소리", glyph: "mute", run: sys("mute") },
   { id: "b-notes", title: "노트 검색 관리", keys: "note search obsidian 옵시디언 노트 검색 만들기 추가 관리", glyph: "folder", run: async ui => ui.openNoteManager() },
   { id: "b-pin", title: "창 고정·해제", keys: "pin float always on top 고정 항상 위", glyph: "pin", run: async ui => ui.togglePin() },
+  { id: "b-graph", title: "노트 그래프", keys: "graph vault 그래프 전체 노트 연결 링크 obsidian 옵시디언", glyph: "graph", run: async ui => ui.openGraph() },
+  { id: "b-center", title: "Baro 창 위치 초기화", keys: "center reset window position 가운데 위치 초기화 창", glyph: "center", run: () => invoke("set_placed", { on: false }) },
   { id: "b-hotkeys", title: "단축키 설정", keys: "hotkey shortcut keyboard 단축키", glyph: "keyboard", run: async ui => ui.openHotkeys() },
   { id: "b-store", title: "확장 스토어", keys: "extension store install 확장 스토어 설치", glyph: "download", run: async ui => ui.openStore() },
   { id: "b-perm", title: "Baro 권한 확인", keys: "permission accessibility 권한 손쉬운 사용", glyph: "shield",
@@ -126,20 +129,21 @@ function snippets(q: string): Item[] {
   });
 }
 
-function commands(q: string, ui: Ui): Item[] {
+type Scored = { s: number; item: Item };
+function commands(q: string, ui: Ui): Scored[] {
   if (!isMac) return [];
   // 사용자가 만든 노트 검색도 명령처럼 찾을 수 있게
   const notes: Cmd[] = config.note_searches.map(n => ({ id: `note-${n.id}`, title: n.name, glyph: KIND_LABELS[n.kind]?.glyph ?? "doc",
     keys: `노트 note obsidian 옵시디언 ${KIND_LABELS[n.kind]?.title ?? ""}`, run: async u => u.openNotes(n.id) }));
   return [...notes, ...COMMANDS].map(c => ({ c, s: score(q, c.title, c.keys) }))
     .filter(x => x.s >= (q.length < 2 ? 3 : 1)).sort((a, b) => b.s - a.s).slice(0, 5)
-    .map(({ c }) => ({ id: c.id, title: c.title, kind: c.id.startsWith("note-") ? "wiki" as const : "cmd" as const,
+    .map(({ c, s }) => ({ s, item: { id: c.id, title: c.title, kind: c.id.startsWith("note-") ? "wiki" as const : "cmd" as const,
       subtitle: c.id.startsWith("w-") ? "창 관리" : c.id.startsWith("note-") ? "노트 검색" : "명령",
-      glyph: c.glyph, actions: [{ title: "실행", confirm: c.confirm, run: () => c.run(ui) }] }));
+      glyph: c.glyph, actions: [{ title: "실행", confirm: c.confirm, run: () => c.run(ui) }] } }));
 }
 
 // 설치된 확장의 명령. keyword가 있으면 "keyword 내용"의 내용을 스크립트에 넘김
-function extItems(q: string, ui: Ui): Item[] {
+function extItems(q: string, ui: Ui): Scored[] {
   const [kw, ...rest] = q.split(/\s+/);
   return exts.flatMap(m => m.commands.map(c => {
     const exact = !!c.keyword && kw.toLowerCase() === c.keyword.toLowerCase();
@@ -156,7 +160,7 @@ function extItems(q: string, ui: Ui): Item[] {
       subtitle: c.keyword && !exact ? `${m.name} · ${c.keyword} 내용` : m.name, kind: "ext", glyph: m.name[0],
       actions: [{ title: { copy: "실행 후 복사", view: "실행", open: "실행 후 열기", silent: "실행" }[c.mode], run: exec }] };
     return { s, item };
-  })).filter(x => x.s >= (q.length < 2 ? 3 : 1)).sort((a, b) => b.s - a.s).slice(0, 5).map(x => x.item);
+  })).filter(x => x.s >= (q.length < 2 ? 3 : 1)).sort((a, b) => b.s - a.s).slice(0, 5);
 }
 
 // 확장 스토어 화면의 항목
@@ -197,6 +201,7 @@ export function homeItems(ui: Ui): Item[] {
     ex("system", "moon", "cmd", "시스템 명령", "잠자기, 화면 잠금, 휴지통 비우기, 다크 모드", "휴지통"),
     ...config.note_searches.map(n => go(`note-${n.id}`, KIND_LABELS[n.kind]?.glyph ?? "doc", "wiki", n.name,
       `노트 검색 · ${KIND_LABELS[n.kind]?.title ?? n.kind}`, "열기", async () => ui.openNotes(n.id), true)),
+    go("graph", "graph", "wiki", "노트 그래프", "Obsidian 전체 노트의 연결을 그래프로", "열기", async () => ui.openGraph(), true),
     go("notes", "folder", "cmd", "노트 검색 만들기·관리", "Obsidian 폴더를 골라 나만의 검색 기능 추가", "열기", async () => ui.openNoteManager(), true),
     go("store", "download", "store", "확장 스토어", exts.length ? `확장 ${exts.length}개 설치됨` : "확장 검색·설치", "열기", async () => ui.openStore(), true),
     go("hotkeys", "keyboard", "cmd", "단축키 설정", "기능별 단축키를 직접 지정", "열기", async () => ui.openHotkeys(), true),
@@ -222,13 +227,18 @@ export async function query(q: string, ui: Ui): Promise<{ top: Item[]; bottom: I
   const c = calc(q); if (c) top.push(c);
   top.push(...quicklinks(q));
   const apps = await invoke<AppEntry[]>("search", { q });
+  // Baro 명령·확장이 이름이나 키워드 단어로 시작하면 앱보다 먼저. 단, 앱 이름 자체가 검색어로 시작하면 앱 우선
+  const cmds = [...extItems(q, ui), ...commands(q, ui)];
+  const appFirst = q.length < 2 || apps.some(a => [a.name, a.alias].some(n => n.toLowerCase().startsWith(q.toLowerCase())));
+  const strong = appFirst ? [] : cmds.filter(x => x.s >= 3);
+  top.push(...strong.map(x => x.item));
   apps.forEach(a => top.push({ id: a.path, title: a.name, subtitle: "앱", kind: "app", path: a.path, actions: [
     { title: "열기", run: () => invoke("launch", { path: a.path }) },
     { title: isMac ? "Finder에서 보기" : "폴더에서 보기", run: () => invoke("reveal", { path: a.path }) },
     { title: "경로 복사", run: () => copy(a.path) },
     { title: "이름 복사", run: () => copy(a.name) },
   ] }));
-  top.push(...extItems(q, ui), ...commands(q, ui), ...snippets(q));
+  top.push(...cmds.filter(x => !strong.includes(x)).map(x => x.item), ...snippets(q));
   const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
   const bottom: Item[] = [{ id: "web", title: `"${q}" 웹에서 검색`, subtitle: "Google", kind: "web", glyph: "globe", actions: [
     { title: "Google에서 검색", run: () => invoke("open_url", { url }) },
