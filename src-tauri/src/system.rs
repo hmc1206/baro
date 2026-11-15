@@ -33,12 +33,20 @@ pub fn open_settings(kind: &str) -> Result<(), String> {
         .spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
-// Baro를 띄우기 직전에 앞에 있던 앱의 pid
-pub fn frontmost_pid() -> Option<i32> {
-    let asn = Command::new("lsappinfo").arg("front").output().ok()?;
+// Baro를 띄우기 직전에 앞에 있던 앱의 pid와 번들 ID
+pub fn frontmost() -> (Option<i32>, Option<String>) {
+    let Ok(asn) = Command::new("lsappinfo").arg("front").output() else { return (None, None) };
     let asn = String::from_utf8_lossy(&asn.stdout).trim().to_string();
-    let o = Command::new("lsappinfo").args(["info", "-only", "pid", &asn]).output().ok()?;
-    String::from_utf8_lossy(&o.stdout).trim().rsplit('=').next()?.parse().ok()
+    let field = |key: &str| -> Option<String> {
+        let o = Command::new("lsappinfo").args(["info", "-only", key, &asn]).output().ok()?;
+        Some(String::from_utf8_lossy(&o.stdout).trim().rsplit('=').next()?.trim_matches('"').to_string())
+    };
+    (field("pid").and_then(|p| p.parse().ok()), field("bundleid").filter(|b| !b.is_empty() && b != "[ NULL ]"))
+}
+
+// 앱을 앞으로 가져오기 (권한 필요 없음)
+pub fn activate(bundle: &str) {
+    let _ = Command::new("open").args(["-b", bundle]).spawn();
 }
 
 // area: 작업 영역(메뉴 막대·Dock 제외) x, y, w, h (포인트 단위)

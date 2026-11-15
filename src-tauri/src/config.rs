@@ -1,5 +1,6 @@
 // 사용자 설정 파일 (~/Library/Application Support/dev.hmc.baro/config.json)
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -7,6 +8,13 @@ pub struct Quicklink { pub keyword: String, pub name: String, pub url: String }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Snippet { pub keyword: String, pub name: String, pub text: String }
+
+// 사용자가 만드는 노트 검색: Obsidian 폴더 하나를 정해진 방식으로 검색
+// kind: "commands"(명령어 사전) | "notes"(일반 노트) | "snippets"(스니펫 모음)
+#[derive(Serialize, Deserialize, Clone)]
+pub struct NoteSearch { pub id: String, pub name: String, pub dir: String, pub kind: String }
+
+pub const NOTE_KINDS: &[&str] = &["commands", "notes", "snippets"];
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -21,7 +29,14 @@ pub struct Config {
     pub snippets: Vec<Snippet>,
     // 확장 스토어 목록(index.json) 주소. https:// 또는 file://
     pub store_url: String,
+    // 노트 검색 목록 (Baro의 "노트 검색 관리"에서 추가·수정)
+    pub note_searches: Vec<NoteSearch>,
+    // 기능별 전역 단축키 (예: "Alt+Space"). 노트 검색은 "note:<id>". 빈 값이면 사용 안 함
+    pub hotkeys: BTreeMap<String, String>,
 }
+
+// 고정 기능의 단축키 기본값
+pub const HOTKEY_ACTIONS: &[(&str, &str)] = &[("baro", "Alt+Space"), ("ai", ""), ("store", "")];
 
 fn ql(k: &str, n: &str, u: &str) -> Quicklink { Quicklink { keyword: k.into(), name: n.into(), url: u.into() } }
 fn sn(k: &str, n: &str, t: &str) -> Snippet { Snippet { keyword: k.into(), name: n.into(), text: t.into() } }
@@ -45,6 +60,11 @@ impl Default for Config {
                 sn("thx", "감사 인사", "확인 감사합니다. 좋은 하루 보내세요!"),
             ],
             store_url: String::new(),
+            note_searches: vec![NoteSearch {
+                id: "linux".into(), name: "리눅스 명령어 검색".into(), kind: "commands".into(),
+                dir: "/Volumes/Disk/MyBrain/02_Knowledge/Linux/01_명령어".into(),
+            }],
+            hotkeys: [("note:linux", "Alt+L")].iter().map(|(a, k)| (a.to_string(), k.to_string())).collect(),
         }
     }
 }
@@ -62,6 +82,23 @@ pub fn load(path: &Path) -> Result<Config, String> {
     }
 }
 
+pub fn save(path: &Path, c: &Config) -> Result<(), String> {
+    std::fs::write(path, serde_json::to_vec_pretty(c).unwrap_or_default()).map_err(|e| e.to_string())
+}
+
+// 지금 있는 기능(고정 기능 + 노트 검색)의 단축키. 저장된 값이 없으면 기본값
+pub fn hotkeys(c: &Config) -> BTreeMap<String, String> {
+    let fixed = HOTKEY_ACTIONS.iter().map(|(a, k)| (a.to_string(), k.to_string()));
+    let notes = c.note_searches.iter().map(|n| (format!("note:{}", n.id), String::new()));
+    fixed.chain(notes)
+        .map(|(a, k)| {
+            let v = c.hotkeys.get(&a).cloned()
+                .or_else(|| (a == "note:linux").then(|| c.hotkeys.get("linux_wiki").cloned().unwrap_or_else(|| "Alt+L".into())));
+            (a, v.unwrap_or(k))
+        })
+        .collect()
+}
+
 // 화면에 넘기는 설정 (API 키는 제외)
 #[derive(Serialize)]
 pub struct PublicConfig {
@@ -70,6 +107,7 @@ pub struct PublicConfig {
     pub quicklinks: Vec<Quicklink>,
     pub snippets: Vec<Snippet>,
     pub store_ready: bool,
+    pub note_searches: Vec<NoteSearch>,
     pub error: Option<String>,
 }
 
@@ -78,7 +116,23 @@ pub fn public(path: &Path) -> PublicConfig {
         Ok(c) => PublicConfig {
             ai_ready: c.ai_provider != "claude" || !c.anthropic_api_key.trim().is_empty(),
             ai_model: if c.ai_provider == "claude" { c.ai_model } else { c.ollama_model },
-            store_ready: !c.store_url.trim().is_empty(), quicklinks: c.quicklinks, snippets: c.snippets, error: None },
-        Err(e) => PublicConfig { ai_ready: false, ai_model: String::new(), quicklinks: vec![], snippets: vec![], store_ready: false, error: Some(e) },
+            store_ready: !c.store_url.trim().is_empty(), quicklinks: c.quicklinks, snippets: c.snippets,
+            note_searches: c.note_searches, error: None },
+        Err(e) => PublicConfig { ai_ready: false, ai_model: String::new(), quicklinks: vec![], snippets: vec![], store_ready: false,
+            note_searches: vec![], error: Some(e) },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    // 기본 단축키와 화면에서 만드는 형식(e.code 기반)이 모두 해석되는지
+    #[test]
+    fn hotkey_strings_parse() {
+        for s in ["Alt+Space", "Alt+L", "Alt+KeyL", "Super+Shift+Space", "Control+Alt+Digit1", "Alt+Shift+F5"] {
+            assert!(s.parse::<Shortcut>().is_ok(), "{s}");
+        }
+        assert_eq!("Alt+L".parse::<Shortcut>().unwrap(), "Alt+KeyL".parse::<Shortcut>().unwrap());
     }
 }

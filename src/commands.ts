@@ -1,14 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
+import { NoteSearch, KIND_LABELS } from "./notes";
 
 // confirm이 있으면 Enter를 한 번 더 눌러야 실행 (되돌릴 수 없는 동작)
-export type Action = { title: string; confirm?: string; run: () => Promise<unknown> };
-export type Kind = "app" | "file" | "calc" | "web" | "ai" | "cmd" | "link" | "snippet" | "ext" | "store";
+// keep: 실행 후 입력창을 비우지 않음 (예시 입력, AI 질문 등)
+// shortcut: ⌘K 없이 바로 실행하는 키 ("⌘↵", "⌘O" 등)
+export type Action = { title: string; confirm?: string; keep?: boolean; shortcut?: string; run: () => Promise<unknown> };
+export type Kind = "app" | "file" | "calc" | "web" | "ai" | "cmd" | "link" | "snippet" | "ext" | "store" | "wiki";
 // actions[0]이 Enter로 실행되는 기본 동작, 나머지는 ⌘K 패널에서 선택
-export type Item = { id: string; title: string; subtitle: string; kind: Kind; glyph?: string; path?: string; actions: Action[] };
+// section: 목록에서 이 항목 위에 보일 묶음 제목 (앞 항목과 다를 때만 표시)
+export type Item = { id: string; title: string; subtitle: string; kind: Kind; glyph?: string; path?: string; section?: string; actions: Action[] };
 type AppEntry = { name: string; alias: string; path: string };
 type Quicklink = { keyword: string; name: string; url: string };
 type Snippet = { keyword: string; name: string; text: string };
-export type Config = { ai_ready: boolean; ai_model: string; quicklinks: Quicklink[]; snippets: Snippet[]; store_ready: boolean; error: string | null };
+export type Config = { ai_ready: boolean; ai_model: string; quicklinks: Quicklink[]; snippets: Snippet[]; store_ready: boolean; note_searches: NoteSearch[]; error: string | null };
 type ExtCommand = { name: string; title: string; keywords: string; keyword: string; mode: "copy" | "view" | "open" | "silent"; script: string };
 export type Manifest = { id: string; name: string; description: string; version: string; author: string; commands: ExtCommand[] };
 export type StoreEntry = { id: string; name: string; description: string; version: string; author: string };
@@ -16,10 +20,11 @@ export type StoreEntry = { id: string; name: string; description: string; versio
 // 목록 밖의 화면: 텍스트 결과, 권한 안내
 export type View = { kind: "text"; title: string; text: string; error?: boolean } | { kind: "perm"; perm: string };
 // 화면(App)이 넘겨주는 동작들
-export type Ui = { ask: (q: string) => void; show: (v: View) => void; openStore: () => void };
+export type Ui = { ask: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string) => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
 
 const isMac = navigator.userAgent.includes("Mac");
-let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, error: null };
+let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, note_searches: [], error: null };
+export const getConfig = () => config;
 let exts: Manifest[] = [];
 export async function loadConfig() {
   try { config = await invoke<Config>("get_config"); } catch { /* 이전 설정 유지 */ }
@@ -27,11 +32,11 @@ export async function loadConfig() {
   return config;
 }
 
-async function copy(text: string) {
+export async function copy(text: string) {
   await navigator.clipboard.writeText(text);
   await invoke("hide");
 }
-async function pasteText(text: string) {
+export async function pasteText(text: string) {
   await navigator.clipboard.writeText(text);
   await invoke("paste");
 }
@@ -56,7 +61,7 @@ function calc(q: string): Item | null {
     const v = Function(`"use strict";return (${q.replace(/\^/g, "**")})`)();
     if (typeof v !== "number" || !isFinite(v)) return null;
     const r = String(+v.toFixed(10));
-    return { id: "calc", title: r, subtitle: "계산 결과", kind: "calc", glyph: "=", actions: [
+    return { id: "calc", title: r, subtitle: "계산 결과", kind: "calc", glyph: "calc", actions: [
       { title: "결과 복사", run: () => copy(r) },
       { title: "수식과 결과 복사", run: () => copy(`${q} = ${r}`) },
     ] };
@@ -68,22 +73,25 @@ type Cmd = { id: string; title: string; keys: string; glyph: string; confirm?: s
 const layout = (kind: string) => () => invoke("window_layout", { kind });
 const sys = (cmd: string) => () => invoke("system_cmd", { cmd });
 const COMMANDS: Cmd[] = [
-  { id: "w-left", title: "창: 왼쪽 절반", keys: "window left half 왼쪽", glyph: "◧", run: layout("left") },
-  { id: "w-right", title: "창: 오른쪽 절반", keys: "window right half 오른쪽", glyph: "◨", run: layout("right") },
-  { id: "w-top", title: "창: 위쪽 절반", keys: "window top half 위쪽", glyph: "⬒", run: layout("top") },
-  { id: "w-bottom", title: "창: 아래쪽 절반", keys: "window bottom half 아래쪽", glyph: "⬓", run: layout("bottom") },
-  { id: "w-max", title: "창: 최대화", keys: "window maximize 최대화 전체", glyph: "▣", run: layout("max") },
-  { id: "w-center", title: "창: 가운데로", keys: "window center 가운데 중앙", glyph: "◫", run: layout("center") },
-  { id: "s-sleep", title: "잠자기", keys: "sleep 잠자기 절전", glyph: "☾", run: sys("sleep") },
-  { id: "s-lock", title: "화면 끄기·잠금", keys: "lock screen 잠금 화면", glyph: "⏻", run: sys("lock") },
-  { id: "s-trash", title: "휴지통 비우기", keys: "empty trash 휴지통", glyph: "⌫", confirm: "휴지통의 파일이 영구 삭제돼요. Enter를 한 번 더 누르면 비워요.", run: sys("trash") },
-  { id: "s-dark", title: "다크 모드 전환", keys: "dark mode appearance 다크 모드", glyph: "◐", run: sys("dark") },
-  { id: "s-mute", title: "소리 끄기·켜기", keys: "mute volume 음소거 소리", glyph: "♪", run: sys("mute") },
-  { id: "b-store", title: "확장 스토어", keys: "extension store install 확장 스토어 설치", glyph: "⬇", run: async ui => ui.openStore() },
-  { id: "b-perm", title: "Baro 권한 확인", keys: "permission accessibility 권한 손쉬운 사용", glyph: "✓",
+  { id: "w-left", title: "창: 왼쪽 절반", keys: "window left half 왼쪽", glyph: "left", run: layout("left") },
+  { id: "w-right", title: "창: 오른쪽 절반", keys: "window right half 오른쪽", glyph: "right", run: layout("right") },
+  { id: "w-top", title: "창: 위쪽 절반", keys: "window top half 위쪽", glyph: "top", run: layout("top") },
+  { id: "w-bottom", title: "창: 아래쪽 절반", keys: "window bottom half 아래쪽", glyph: "bottom", run: layout("bottom") },
+  { id: "w-max", title: "창: 최대화", keys: "window maximize 최대화 전체", glyph: "max", run: layout("max") },
+  { id: "w-center", title: "창: 가운데로", keys: "window center 가운데 중앙", glyph: "center", run: layout("center") },
+  { id: "s-sleep", title: "잠자기", keys: "sleep 잠자기 절전", glyph: "moon", run: sys("sleep") },
+  { id: "s-lock", title: "화면 끄기·잠금", keys: "lock screen 잠금 화면", glyph: "lock", run: sys("lock") },
+  { id: "s-trash", title: "휴지통 비우기", keys: "empty trash 휴지통", glyph: "trash", confirm: "휴지통의 파일이 영구 삭제돼요. Enter를 한 번 더 누르면 비워요.", run: sys("trash") },
+  { id: "s-dark", title: "다크 모드 전환", keys: "dark mode appearance 다크 모드", glyph: "contrast", run: sys("dark") },
+  { id: "s-mute", title: "소리 끄기·켜기", keys: "mute volume 음소거 소리", glyph: "mute", run: sys("mute") },
+  { id: "b-notes", title: "노트 검색 관리", keys: "note search obsidian 옵시디언 노트 검색 만들기 추가 관리", glyph: "folder", run: async ui => ui.openNoteManager() },
+  { id: "b-pin", title: "창 고정·해제", keys: "pin float always on top 고정 항상 위", glyph: "pin", run: async ui => ui.togglePin() },
+  { id: "b-hotkeys", title: "단축키 설정", keys: "hotkey shortcut keyboard 단축키", glyph: "keyboard", run: async ui => ui.openHotkeys() },
+  { id: "b-store", title: "확장 스토어", keys: "extension store install 확장 스토어 설치", glyph: "download", run: async ui => ui.openStore() },
+  { id: "b-perm", title: "Baro 권한 확인", keys: "permission accessibility 권한 손쉬운 사용", glyph: "shield",
     run: async ui => ui.show({ kind: "perm", perm: (await invoke<{ accessibility: boolean }>("permissions")).accessibility ? "ok" : "accessibility" }) },
-  { id: "b-config", title: "Baro 설정 열기", keys: "settings config preferences 설정 스니펫 퀵링크 api", glyph: "⚙", run: () => invoke("open_config") },
-  { id: "b-quit", title: "Baro 종료", keys: "quit exit 종료", glyph: "✕", run: sys("quit") },
+  { id: "b-config", title: "Baro 설정 열기", keys: "settings config preferences 설정 스니펫 퀵링크 api", glyph: "settings", run: () => invoke("open_config") },
+  { id: "b-quit", title: "Baro 종료", keys: "quit exit 종료", glyph: "power", run: sys("quit") },
 ];
 
 function expand(text: string) {
@@ -101,7 +109,7 @@ function quicklinks(q: string): Item[] {
     if (!exact && !(rest.length === 0 && score(q, l.keyword, l.name) >= 2)) return [];
     const term = exact ? arg : "";
     const url = l.url.replace(/\{query\}/g, encodeURIComponent(term));
-    return [{ id: `ql-${l.keyword}`, title: term ? `${l.name}: ${term}` : l.name, kind: "link" as const, glyph: "↗",
+    return [{ id: `ql-${l.keyword}`, title: term ? `${l.name}: ${term}` : l.name, kind: "link" as const, glyph: "link",
       subtitle: term ? "퀵링크" : `${l.keyword} 검색어`,
       actions: [{ title: "열기", run: () => invoke("open_url", { url }) }, { title: "URL 복사", run: () => copy(url) }] }];
   });
@@ -111,7 +119,7 @@ function snippets(q: string): Item[] {
   return config.snippets.filter(s => score(q, s.keyword, s.name) >= 2).map(s => {
     const text = () => expand(s.text);
     return { id: `sn-${s.keyword}`, title: s.name, subtitle: `스니펫 · ${expand(s.text).split("\n")[0].slice(0, 30)}`,
-      kind: "snippet" as const, glyph: "¶", actions: [
+      kind: "snippet" as const, glyph: "snippet", actions: [
         { title: "복사", run: () => copy(text()) },
         { title: "앞 앱에 붙여넣기", run: () => pasteText(text()) },
       ] };
@@ -120,9 +128,13 @@ function snippets(q: string): Item[] {
 
 function commands(q: string, ui: Ui): Item[] {
   if (!isMac) return [];
-  return COMMANDS.map(c => ({ c, s: score(q, c.title, c.keys) }))
+  // 사용자가 만든 노트 검색도 명령처럼 찾을 수 있게
+  const notes: Cmd[] = config.note_searches.map(n => ({ id: `note-${n.id}`, title: n.name, glyph: KIND_LABELS[n.kind]?.glyph ?? "doc",
+    keys: `노트 note obsidian 옵시디언 ${KIND_LABELS[n.kind]?.title ?? ""}`, run: async u => u.openNotes(n.id) }));
+  return [...notes, ...COMMANDS].map(c => ({ c, s: score(q, c.title, c.keys) }))
     .filter(x => x.s >= (q.length < 2 ? 3 : 1)).sort((a, b) => b.s - a.s).slice(0, 5)
-    .map(({ c }) => ({ id: c.id, title: c.title, subtitle: c.id.startsWith("w-") ? "창 관리" : "명령", kind: "cmd" as const,
+    .map(({ c }) => ({ id: c.id, title: c.title, kind: c.id.startsWith("note-") ? "wiki" as const : "cmd" as const,
+      subtitle: c.id.startsWith("w-") ? "창 관리" : c.id.startsWith("note-") ? "노트 검색" : "명령",
       glyph: c.glyph, actions: [{ title: "실행", confirm: c.confirm, run: () => c.run(ui) }] }));
 }
 
@@ -168,11 +180,35 @@ export function storeItems(q: string, entries: StoreEntry[], refresh: () => void
   });
 }
 
+// 처음 화면: Baro로 할 수 있는 일. Enter를 누르면 예시를 입력하거나 바로 실행
+export function homeItems(ui: Ui): Item[] {
+  const ex = (id: string, glyph: string, kind: Kind, title: string, subtitle: string, example: string): Item =>
+    ({ id: `home-${id}`, title, subtitle, kind, glyph, actions: [{ title: "예시 입력", keep: true, run: async () => ui.setQuery(example) }] });
+  const go = (id: string, glyph: string, kind: Kind, title: string, subtitle: string, label: string, run: () => Promise<unknown>, keep = false): Item =>
+    ({ id: `home-${id}`, title, subtitle, kind, glyph, actions: [{ title: label, keep, run }] });
+  return [
+    ex("apps", "app", "app", "앱 실행", "앱 이름 입력 · 예: 사파리", "사파리"),
+    ex("files", "file", "cmd", "파일 찾기", "파일 이름 두 글자 이상", "README"),
+    ex("calc", "calc", "calc", "계산기", "수식 입력 · 예: 12*3+4", "12*3+4"),
+    ex("ai", "ai", "ai", "AI에게 묻기", config.ai_ready ? `질문 입력 후 Tab · ${config.ai_model}` : "설정에서 AI 연결 필요", "맥북 생산성 단축키 3개 추천해줘"),
+    ex("window", "left", "cmd", "창 관리", "창 · 왼쪽/오른쪽 절반, 최대화", "창"),
+    ex("links", "link", "link", "퀵링크", config.quicklinks.map(l => l.keyword).join(", ") + " + 검색어", config.quicklinks[0] ? `${config.quicklinks[0].keyword} ` : "yt "),
+    ex("snippets", "snippet", "snippet", "스니펫", config.snippets.map(s => s.keyword).join(", "), config.snippets[0]?.keyword ?? "today"),
+    ex("system", "moon", "cmd", "시스템 명령", "잠자기, 화면 잠금, 휴지통 비우기, 다크 모드", "휴지통"),
+    ...config.note_searches.map(n => go(`note-${n.id}`, KIND_LABELS[n.kind]?.glyph ?? "doc", "wiki", n.name,
+      `노트 검색 · ${KIND_LABELS[n.kind]?.title ?? n.kind}`, "열기", async () => ui.openNotes(n.id), true)),
+    go("notes", "folder", "cmd", "노트 검색 만들기·관리", "Obsidian 폴더를 골라 나만의 검색 기능 추가", "열기", async () => ui.openNoteManager(), true),
+    go("store", "download", "store", "확장 스토어", exts.length ? `확장 ${exts.length}개 설치됨` : "확장 검색·설치", "열기", async () => ui.openStore(), true),
+    go("hotkeys", "keyboard", "cmd", "단축키 설정", "기능별 단축키를 직접 지정", "열기", async () => ui.openHotkeys(), true),
+    go("config", "settings", "cmd", "Baro 설정", "퀵링크·스니펫·AI 모델 편집", "열기", () => invoke("open_config")),
+  ];
+}
+
 export function aiItem(q: string, ask: (q: string) => void): Item {
   return config.ai_ready
-    ? { id: "ai", title: `AI에게 묻기: ${q}`, subtitle: `${config.ai_model} · Tab`, kind: "ai", glyph: "✦",
-        actions: [{ title: "AI에게 묻기", run: async () => ask(q) }] }
-    : { id: "ai", title: "AI에게 묻기 (API 키 필요)", subtitle: "설정 열기", kind: "ai", glyph: "✦",
+    ? { id: "ai", title: `AI에게 묻기: ${q}`, subtitle: `${config.ai_model} · Tab`, kind: "ai", glyph: "ai",
+        actions: [{ title: "AI에게 묻기", keep: true, run: async () => ask(q) }] }
+    : { id: "ai", title: "AI에게 묻기 (API 키 필요)", subtitle: "설정 열기", kind: "ai", glyph: "ai",
         actions: [{ title: "설정 파일 열기", run: () => invoke("open_config") }] };
 }
 
@@ -181,7 +217,7 @@ export async function query(q: string, ui: Ui): Promise<{ top: Item[]; bottom: I
   q = q.trim();
   if (!q) return { top: [], bottom: [] };
   const top: Item[] = [];
-  if (config.error) top.push({ id: "cfg-err", title: "설정 파일을 읽지 못했어요", subtitle: config.error, kind: "cmd", glyph: "!",
+  if (config.error) top.push({ id: "cfg-err", title: "설정 파일을 읽지 못했어요", subtitle: config.error, kind: "cmd", glyph: "warn",
     actions: [{ title: "설정 파일 열기", run: () => invoke("open_config") }] });
   const c = calc(q); if (c) top.push(c);
   top.push(...quicklinks(q));
@@ -194,7 +230,7 @@ export async function query(q: string, ui: Ui): Promise<{ top: Item[]; bottom: I
   ] }));
   top.push(...extItems(q, ui), ...commands(q, ui), ...snippets(q));
   const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
-  const bottom: Item[] = [{ id: "web", title: `"${q}" 웹에서 검색`, subtitle: "Google", kind: "web", glyph: "G", actions: [
+  const bottom: Item[] = [{ id: "web", title: `"${q}" 웹에서 검색`, subtitle: "Google", kind: "web", glyph: "globe", actions: [
     { title: "Google에서 검색", run: () => invoke("open_url", { url }) },
     { title: "검색어 복사", run: () => copy(q) },
     { title: "검색 URL 복사", run: () => copy(url) },
