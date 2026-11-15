@@ -41,6 +41,7 @@
   },
   "bundle": {
     "active": true,
+    "macOS": { "signingIdentity": "Baro Dev" },
     "targets": "all",
     "icon": [
       "icons/32x32.png",

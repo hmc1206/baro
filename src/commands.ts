@@ -20,7 +20,7 @@ export type StoreEntry = { id: string; name: string; description: string; versio
 // 목록 밖의 화면: 텍스트 결과, 권한 안내
 export type View = { kind: "text"; title: string; text: string; error?: boolean } | { kind: "perm"; perm: string };
 // 화면(App)이 넘겨주는 동작들
-export type Ui = { ask: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
+export type Ui = { ask: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
 
 const isMac = navigator.userAgent.includes("Mac");
 let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, note_searches: [], error: null };
@@ -87,6 +87,7 @@ const COMMANDS: Cmd[] = [
   { id: "s-mute", title: "소리 끄기·켜기", keys: "mute volume 음소거 소리", glyph: "mute", run: sys("mute") },
   { id: "b-notes", title: "노트 검색 관리", keys: "note search obsidian 옵시디언 노트 검색 만들기 추가 관리", glyph: "folder", run: async ui => ui.openNoteManager() },
   { id: "b-pin", title: "창 고정·해제", keys: "pin float always on top 고정 항상 위", glyph: "pin", run: async ui => ui.togglePin() },
+  { id: "b-files", title: "파일 찾기 (Finder)", keys: "files finder find 파일 찾기 위치 폴더", glyph: "file", run: async ui => ui.openFiles() },
   { id: "b-graph", title: "노트 그래프", keys: "graph vault 그래프 전체 노트 연결 링크 obsidian 옵시디언", glyph: "graph", run: async ui => ui.openGraph() },
   { id: "b-center", title: "Baro 창 위치 초기화", keys: "center reset window position 가운데 위치 초기화 창", glyph: "center", run: () => invoke("set_placed", { on: false }) },
   { id: "b-hotkeys", title: "단축키 설정", keys: "hotkey shortcut keyboard 단축키", glyph: "keyboard", run: async ui => ui.openHotkeys() },
@@ -192,7 +193,7 @@ export function homeItems(ui: Ui): Item[] {
     ({ id: `home-${id}`, title, subtitle, kind, glyph, actions: [{ title: label, keep, run }] });
   return [
     ex("apps", "app", "app", "앱 실행", "앱 이름 입력 · 예: 사파리", "사파리"),
-    ex("files", "file", "cmd", "파일 찾기", "파일 이름 두 글자 이상", "README"),
+    go("files", "file", "cmd", "파일 찾기", "홈 · 외장 디스크에서 이름으로 찾고 Finder로 위치 보기", "열기", async () => ui.openFiles(), true),
     ex("calc", "calc", "calc", "계산기", "수식 입력 · 예: 12*3+4", "12*3+4"),
     ex("ai", "ai", "ai", "AI에게 묻기", config.ai_ready ? `질문 입력 후 Tab · ${config.ai_model}` : "설정에서 AI 연결 필요", "맥북 생산성 단축키 3개 추천해줘"),
     ex("window", "left", "cmd", "창 관리", "창 · 왼쪽/오른쪽 절반, 최대화", "창"),
@@ -248,20 +249,20 @@ export async function query(q: string, ui: Ui): Promise<{ top: Item[]; bottom: I
   return { top, bottom };
 }
 
-// 파일 검색 (Spotlight)
-export async function fileItems(q: string): Promise<Item[]> {
+// 파일 검색 (Spotlight). wide: 파일 찾기 화면 — 홈 + 외장 디스크, Enter가 Finder에서 보기
+export async function fileItems(q: string, wide = false): Promise<Item[]> {
   q = q.trim();
-  if (q.length < 2 || !isMac) return [];
-  const paths = await invoke<string[]>("files", { q }).catch(() => [] as string[]);
+  if (q.length < (wide ? 1 : 2) || !isMac) return [];
+  const paths = await invoke<string[]>(wide ? "files_wide" : "files", { q }).catch(() => [] as string[]);
   return paths.map(p0 => {
     const p = p0.normalize("NFC");
     const name = p.split("/").pop() ?? p;
     const dir = p.slice(0, p.length - name.length - 1).replace(/^\/Users\/[^/]+/, "~");
-    return { id: `f-${p}`, title: name, subtitle: dir, kind: "file" as const, path: p0, actions: [
-      { title: "열기", run: () => invoke("open_path", { path: p0 }) },
-      { title: "Finder에서 보기", run: () => invoke("reveal", { path: p0 }) },
-      { title: "경로 복사", run: () => copy(p0) },
-    ] };
+    const open: Action = { title: "열기", shortcut: wide ? "⌘O" : undefined, run: () => invoke("open_path", { path: p0 }) };
+    const finder: Action = { title: "Finder에서 보기", run: () => invoke("reveal", { path: p0 }) };
+    const path: Action = { title: "경로 복사", shortcut: wide ? "⌘C" : undefined, run: () => copy(p0) };
+    return { id: `f-${p}`, title: name, subtitle: dir, kind: "file" as const, path: p0,
+      actions: wide ? [finder, open, path] : [open, finder, path] };
   });
 }
 

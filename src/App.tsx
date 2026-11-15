@@ -46,7 +46,7 @@ const PERMS: Record<string, { title: string; body: string }> = {
 
 // 단축키를 지정할 수 있는 기능: 고정 기능(Rust config.rs의 HOTKEY_ACTIONS) + 사용자가 만든 노트 검색
 const hotkeyLabels = (): [string, string][] => [
-  ["baro", "Baro 열기"], ["ai", "AI에게 묻기"], ["store", "확장 스토어"], ["graph", "노트 그래프 (전체)"],
+  ["baro", "Baro 열기"], ["ai", "AI에게 묻기"], ["store", "확장 스토어"], ["graph", "노트 그래프 (전체)"], ["files", "파일 찾기 (Finder)"],
   ...getConfig().note_searches.map(n => [`note:${n.id}`, n.name] as [string, string]),
   // 검색어 없는 퀵링크 (예: 아이디어 캔버스 열기). 누르면 Baro 창 없이 바로 열림
   ...getConfig().quicklinks.filter(l => !l.url.includes("{query}")).map(l => [`link:${l.keyword}`, l.name] as [string, string]),
@@ -105,14 +105,15 @@ function newPwNote(last: Doc | undefined, name: string, title: string, password:
   const links = [...new Set([...keep, ...(last ? [baseOf(last.file)] : [])])].map(l => `[[${l}]]`).join(" · ");
   return `${lines.join("\n")}\n\n# ${title || name}\n\n## 풀이\n- \n\n## 배운 점\n- \n\n## 관련\n${links}\n`;
 }
-// 화면 종류: null(기본 검색) | 확장 스토어 | 노트 검색 | 예시 고르기 | 단축키 설정 | AI 질문 | 노트 검색 관리 | 노트 검색 추가·수정
-type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit";
+// 화면 종류: null(기본 검색) | 파일 찾기 | 확장 스토어 | 노트 검색 | 예시 고르기 | 단축키 설정 | AI 질문 | 노트 검색 관리 | 노트 검색 추가·수정
+type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit" | "files";
 
 export default function App() {
   const [q, setQ] = useState("");
   const [top, setTop] = useState<Item[]>([]);
   const [bottom, setBottom] = useState<Item[]>([]);
   const [files, setFiles] = useState<Item[]>([]);
+  const [found, setFound] = useState<{ items: Item[]; loading: boolean }>({ items: [], loading: false }); // 파일 찾기 화면 결과
   const [sel, setSel] = useState(0);
   const [menu, setMenu] = useState(false); // ⌘K 액션 패널
   const [asel, setAsel] = useState(0);
@@ -179,6 +180,7 @@ export default function App() {
       .catch(e => setNotes({ search: search!, docs: [], loading: false, error: String(e) }));
   };
   const openGraph = () => openNotes("__vault", true);
+  const openFiles = () => { setFound({ items: [], loading: false }); enter("files"); };
   // 비밀번호 수정·새 노트 저장 후 노트 다시 읽기
   const savePw = async () => {
     const search = notes.search;
@@ -230,7 +232,7 @@ export default function App() {
   };
   const openExamples = (doc: Doc) => { setExDoc({ doc, prevQ: q }); setQ(""); setMode("examples"); };
   const ui: Ui = {
-    ask, openStore, openNotes, openGraph, openNoteManager, openHotkeys, togglePin,
+    ask, openStore, openNotes, openGraph, openFiles, openNoteManager, openHotkeys, togglePin,
     show: v => { setAi(null); setView(v); },
     setQuery: text => { setQ(text); input.current?.focus(); },
   };
@@ -243,6 +245,7 @@ export default function App() {
     const kind = notes.search?.kind ?? "notes";
     const obsidian: Action = { title: "Obsidian에서 열기", shortcut: "⌘O",
       run: () => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` }) };
+    const finder: Action = { title: "Finder에서 보기", shortcut: "⌘F", run: () => invoke("reveal", { path: d.file }) };
     if (kind === "passwords") {
       const p = d.meta.password ?? "", ssh = d.meta.ssh;
       return { id: `n-${d.file}`, title: d.name, kind: "wiki", glyph: "lock", section: q.trim() ? undefined : d.category,
@@ -252,19 +255,20 @@ export default function App() {
             { title: "앞 앱에 비밀번호 붙여넣기", shortcut: "⌘↵", run: () => pasteText(p) }] : []),
           { title: "비밀번호 수정", shortcut: "⌘E", keep: true, run: async () => openPw(d) },
           ...(ssh ? [{ title: "접속 명령 복사", run: () => copy(ssh) }, { title: "접속 명령 붙여넣기", run: () => pasteText(ssh) }] : []),
-          obsidian,
+          obsidian, finder,
         ] };
     }
     const pick = kind === "commands" ? "예시 골라서 쓰기" : "코드 골라서 쓰기";
     const actions: Action[] = kind === "snippets" ? [
       { title: "앞 앱에 붙여넣기", run: () => pasteText(d.body) },
       { title: "복사", run: () => copy(d.body) },
-      obsidian,
+      obsidian, finder,
     ] : [
       ...(d.examples.length ? [{ title: pick, keep: true, run: async () => openExamples(d) }] : [obsidian]),
       ...(d.examples[0] ? [{ title: kind === "commands" ? "대표 예시 붙여넣기" : "첫 코드 붙여넣기", shortcut: "⌘↵", run: () => pasteText(d.examples[0].cmd) }] : []),
       { title: "이름 복사", run: () => copy(d.name) },
       ...(d.examples.length ? [obsidian] : []),
+      finder,
       ...d.related.map(r => ({ title: `관련: ${r}`, keep: true, run: async () => setQ(r) })),
     ];
     const sub = q.trim() ? d.category
@@ -325,6 +329,7 @@ export default function App() {
     : mode === "hotkeys" ? hotkeyItems()
     : mode === "store" ? storeItems(q, store.entries, () => setRev(r => r + 1), ui)
     : mode === "ask" ? (q.trim() ? [aiItem(q.trim(), ask)] : [])
+    : mode === "files" ? found.items
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
   const graphOn = mode === "note" && graph;
   const curDoc = mode === "note" ? (graphOn && pick ? pick : noteList[sel]) : undefined;
@@ -351,6 +356,7 @@ export default function App() {
     else if (action === "store") openStore();
     else if (action === "ai") enter("ask");
     else if (action === "graph") openGraph();
+    else if (action === "files") openFiles();
     else if (mode !== null && mode !== "store" && mode !== "noteEdit") enter(null);
     input.current?.focus(); input.current?.select();
   };
@@ -391,6 +397,16 @@ export default function App() {
       fileItems(q).then(f => { if (id === seq.current) setFiles(f); });
     }, 180);
     return () => clearTimeout(t);
+  }, [q, mode]);
+
+  // 파일 찾기 화면: 입력이 멈추면 홈 + 외장 디스크 검색
+  useEffect(() => {
+    if (mode !== "files") return;
+    if (!q.trim()) { setFound({ items: [], loading: false }); return; }
+    setFound(f => ({ ...f, loading: true }));
+    let live = true;
+    const t = setTimeout(() => fileItems(q, true).then(items => { if (live) { setFound({ items, loading: false }); setSel(0); } }), 150);
+    return () => { live = false; clearTimeout(t); };
   }, [q, mode]);
 
   // 선택 항목이 보이도록 스크롤
@@ -484,7 +500,8 @@ export default function App() {
     // ⌘↵, ⌘O 같은 동작별 단축키
     if (e.metaKey && cur && !menu) {
       const sc = e.code === "Enter" ? "⌘↵" : e.code.startsWith("Key") ? `⌘${e.code.slice(3)}` : "";
-      const a = cur.actions.find(x => x.shortcut === sc);
+      const typed = input.current && input.current.selectionStart !== input.current.selectionEnd;
+      const a = sc === "⌘C" && typed ? undefined : cur.actions.find(x => x.shortcut === sc); // 입력창에서 글자를 골랐으면 ⌘C는 그 글자 복사
       if (a) { e.preventDefault(); run(a); return; }
     }
     const n = menu ? cur?.actions.length ?? 0 : items.length;
@@ -509,7 +526,8 @@ export default function App() {
   }, []);
 
   const perm = view?.kind === "perm" ? PERMS[view.perm] ?? PERMS.accessibility : null;
-  const quick = cur?.actions.find((a, i) => i > 0 && a.shortcut); // 기본 동작과 겹치면 하단에 두 번 보이지 않게
+  const quick = graphOn && pick ? cur?.actions.find(a => a.shortcut === "⌘F") // 그래프: 고른 노트의 위치 보기
+    : cur?.actions.find((a, i) => i > 0 && a.shortcut); // 기본 동작과 겹치면 하단에 두 번 보이지 않게
   const footerKeys: [string, string[]][] = view
     ? [[view.kind === "perm" ? (view.perm === "ok" ? "" : "시스템 설정 열기") : "결과 복사", ["↵"]], ["돌아가기", ["esc"]]]
     : ai ? [["답변 복사", ["⇧", "↵"]], ai.saved ? ["Obsidian에서 열기", ["⌘", "O"]] : ["Obsidian에 저장", ["⌘", "S"]], ["돌아가기", ["esc"]]]
@@ -524,14 +542,17 @@ export default function App() {
     : mode === "examples" ? `${exDoc?.doc.name ?? ""} 예시 검색`
     : mode === "hotkeys" ? "단축키 설정"
     : mode === "ask" ? "AI에게 물어보기 (Enter)"
+    : mode === "files" ? "파일 이름 (홈 · 외장 디스크)"
     : "앱, 파일, 명령, 계산, AI에게 묻기";
   const header = home ? "Baro로 할 수 있는 일"
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`
+    : mode === "files" ? (found.loading ? "찾는 중…" : q.trim() ? `파일 ${found.items.length}개` : "파일 이름을 입력하세요 · Enter로 Finder에서 보기")
     : mode === "note" && (notes.loading || q.trim()) ? (notes.loading ? "노트 불러오는 중…" : `검색 결과 ${noteList.length}개`)
     : null;
   const empty = mode === "store" ? store.error
     : mode === "note" ? notes.error ?? (!notes.loading && !items.length ? (q ? "일치하는 노트가 없어요." : "폴더에 노트(.md)가 없어요.") : null)
     : mode === "hotkeys" ? hk.error
+    : mode === "files" ? (q.trim() && !found.loading && !found.items.length ? "일치하는 파일이 없어요." : null)
     : mode === null && q && !items.length ? "결과가 없습니다. 다른 이름으로 검색해 보세요." : null;
 
   const listEl = (

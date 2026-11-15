@@ -92,13 +92,29 @@ pub fn paste() -> Result<(), String> {
 // Spotlight로 홈 폴더 파일 검색. 개발 폴더·숨김 폴더는 제외하고 이름이 검색어로 시작하는 것 우선
 pub fn find_files(q: &str, n: usize) -> Vec<String> {
     let Some(home) = dirs::home_dir() else { return vec![] };
-    let Ok(mut child) = Command::new("mdfind").arg("-onlyin").arg(&home).args(["-name", q])
+    mdfind_name(q, &[home], n)
+}
+
+// 파일 찾기 화면: 홈 폴더 + 연결된 외장 디스크(/Volumes/*, 시스템 디스크 바로가기는 제외)
+pub fn find_files_wide(q: &str, n: usize) -> Vec<String> {
+    let mut roots: Vec<std::path::PathBuf> = dirs::home_dir().into_iter().collect();
+    if let Ok(rd) = std::fs::read_dir("/Volumes") {
+        roots.extend(rd.flatten().filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false)).map(|e| e.path()));
+    }
+    mdfind_name(q, &roots, n)
+}
+
+fn mdfind_name(q: &str, roots: &[std::path::PathBuf], n: usize) -> Vec<String> {
+    if roots.is_empty() { return vec![] }
+    let mut cmd = Command::new("mdfind");
+    for r in roots { cmd.arg("-onlyin").arg(r); }
+    let Ok(mut child) = cmd.args(["-name", q])
         .stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else { return vec![] };
     let skip = ["/node_modules/", "/Library/", "/.", "/target/", ".app/", "/dist/"];
     let mut out: Vec<String> = BufReader::new(child.stdout.take().unwrap()).lines()
         .map_while(Result::ok)
         .filter(|l| !skip.iter().any(|s| l.contains(s)))
-        .take(200)
+        .take(n.max(200))
         .collect();
     let _ = child.kill();
     let _ = child.wait();

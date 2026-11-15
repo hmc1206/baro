@@ -165,6 +165,12 @@ async fn files(q: String) -> Vec<String> {
     tauri::async_runtime::spawn_blocking(move || system::find_files(&q, 6)).await.unwrap_or_default()
 }
 
+// 파일 찾기 화면: 홈 + 외장 디스크에서 이름으로 검색
+#[tauri::command]
+async fn files_wide(q: String) -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(move || system::find_files_wide(&q, 60)).await.unwrap_or_default()
+}
+
 #[tauri::command]
 fn get_config(app: AppHandle) -> config::PublicConfig { config::public(&config_file(&app)) }
 
@@ -507,7 +513,7 @@ fn main() {
             let app = w.app_handle();
             if *app.state::<AppState>().suspended.lock().unwrap() { register_hotkeys(app); }
         })
-        .invoke_handler(tauri::generate_handler![search, icon, launch, open_path, reveal, open_url, hide,
+        .invoke_handler(tauri::generate_handler![search, icon, launch, open_path, reveal, files_wide, open_url, hide,
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
