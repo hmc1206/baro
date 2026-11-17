@@ -42,8 +42,8 @@ function build(docs: Doc[]): Graph {
 
 const radius = (n: Node, zoom = 1) => (3 + Math.sqrt(n.deg) * 2.2) / Math.sqrt(Math.min(zoom, 1));
 
-export function NoteGraph({ docs, matches, selected, onSelect, onOpen }: {
-  docs: Doc[]; matches: Set<string> | null; selected?: Doc;
+export function NoteGraph({ docs, matches, selected, loading, onSelect, onOpen }: {
+  docs: Doc[]; matches: Set<string> | null; selected?: Doc; loading?: boolean;
   onSelect: (d: Doc) => void; onOpen: (d: Doc) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -213,7 +213,7 @@ export function NoteGraph({ docs, matches, selected, onSelect, onOpen }: {
   return (
     <div className="graph">
       <canvas ref={canvas} />
-      <div className="graph-info">{matches ? (matches.size ? `검색 결과 ${matches.size}개 · ` : "일치하는 노트가 없어요 · ") : ""}노트 {g.nodes.length}개 · 링크 {g.edges.length}개{!matches && linked < g.nodes.length ? ` · 연결 없는 노트 ${g.nodes.length - linked}개` : ""}</div>
+      <div className="graph-info">{loading ? "노트 불러오는 중… (외장 디스크는 처음에 몇 초 걸려요)" : <>{matches ? (matches.size ? `검색 결과 ${matches.size}개 · ` : "일치하는 노트가 없어요 · ") : ""}노트 {g.nodes.length}개 · 링크 {g.edges.length}개{!matches && linked < g.nodes.length ? ` · 연결 없는 노트 ${g.nodes.length - linked}개` : ""}</>}</div>
     </div>
   );
 }

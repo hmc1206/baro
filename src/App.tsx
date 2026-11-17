@@ -661,7 +661,7 @@ export default function App() {
       ) : graphOn ? (
         // 노트 그래프: 왼쪽 그래프 + 오른쪽 미리보기. 검색어는 맞는 노트만 진하게
         <div className="split">
-          <NoteGraph docs={notes.docs} matches={graphMatches} selected={curDoc}
+          <NoteGraph docs={notes.docs} matches={graphMatches} selected={curDoc} loading={notes.loading}
             onSelect={d => { setPick(d); setMenu(false); }}
             onOpen={d => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` })} />
           <article className="preview md" dangerouslySetInnerHTML={{ __html: previewHtml }} />
