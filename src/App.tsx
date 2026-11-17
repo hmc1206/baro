@@ -77,6 +77,13 @@ type Hk = { keys: Record<string, string>; recording: string | null; error: strin
 // 비밀번호 모음: 수정(doc 있음) 또는 새 노트 추가(doc 없음)
 type PwDraft = { doc: Doc | null; name: string; title: string; password: string; error: string | null; saving: boolean };
 const MASK = "••••••••";
+// 노트 검색별로 읽은 노트 (창을 다시 열 때 바로 보여 주기용). sig: 내용이 바뀌었는지 비교
+const docCache = new Map<string, { docs: Doc[]; sig: string }>();
+function docsSig(docs: Doc[]) {
+  let h = 0;
+  for (const d of docs) for (const s of [d.file, d.body]) for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return `${docs.length}:${h}`;
+}
 const lastDoc = (docs: Doc[]) => { const d = byCategory(docs); return d[d.length - 1]; };
 const yamlQuote = (v: string) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
@@ -132,6 +139,7 @@ export default function App() {
   const [pw, setPw] = useState<PwDraft | null>(null);
   const [graph, setGraph] = useState(false); // 노트 검색을 그래프로 보기 (⌘G)
   const [pick, setPick] = useState<Doc | null>(null); // 그래프에서 클릭한 노트
+  const [local, setLocal] = useState(0); // 로컬 그래프: 0 끔, 1·2 = 고른 노트에서 몇 단계까지 (⌘L)
   const [hk, setHk] = useState<Hk>({ keys: {}, recording: null, error: null });
   const aiSeq = useRef(0);
   const input = useRef<HTMLInputElement>(null);
@@ -173,11 +181,19 @@ export default function App() {
     if (!search) search = (await loadConfig()).note_searches.find(n => n.id === id);
     if (!search) return;
     enter("note");
-    setGraph(asGraph); setPick(null); setReveal(false);
-    setNotes(n => ({ search: search!, docs: n.search?.id === id ? n.docs : [], loading: true, error: null }));
+    setGraph(asGraph); setPick(null); setReveal(false); setLocal(0);
+    // 전에 읽은 노트가 있으면 바로 보여 주고, 뒤에서 다시 읽어 바뀐 경우에만 갱신 (외장 디스크 첫 읽기 몇 초)
+    const cached = docCache.get(id);
+    setNotes({ search, docs: cached?.docs ?? [], loading: !cached, error: null });
+    const mine = (n: Notes) => n.search?.id === id;
     loadDocs(search)
-      .then(docs => setNotes({ search: search!, docs, loading: false, error: null }))
-      .catch(e => setNotes({ search: search!, docs: [], loading: false, error: String(e) }));
+      .then(docs => {
+        const sig = docsSig(docs);
+        if (docCache.get(id)?.sig === sig) { setNotes(n => mine(n) ? { ...n, loading: false } : n); return; }
+        docCache.set(id, { docs, sig });
+        setNotes(n => mine(n) ? { search: search!, docs, loading: false, error: null } : n);
+      })
+      .catch(e => setNotes(n => mine(n) ? { ...n, loading: false, error: cached ? null : String(e) } : n));
   };
   const openGraph = () => openNotes("__vault", true);
   const openFiles = () => { setFound({ items: [], loading: false }); enter("files"); };
@@ -497,6 +513,8 @@ export default function App() {
     if (mode === "note" && notes.search?.kind === "passwords" && e.metaKey && e.code === "KeyR") { e.preventDefault(); setReveal(v => !v); return; }
     // ⌘G: 노트 목록 ↔ 그래프
     if (mode === "note" && e.metaKey && e.code === "KeyG") { e.preventDefault(); setGraph(v => !v); setPick(null); setMenu(false); return; }
+    // ⌘L: 로컬 그래프 끔 → 1단계 → 2단계 → 끔
+    if (graphOn && e.metaKey && e.code === "KeyL") { e.preventDefault(); setLocal(v => (v + 1) % 3); setMenu(false); return; }
     // ⌘↵, ⌘O 같은 동작별 단축키
     if (e.metaKey && cur && !menu) {
       const sc = e.code === "Enter" ? "⌘↵" : e.code.startsWith("Key") ? `⌘${e.code.slice(3)}` : "";
@@ -534,7 +552,8 @@ export default function App() {
     : hk.recording ? [["취소", ["esc"]]]
     : cur ? [[cur.actions[0].title, ["↵"]], ...(quick ? [[quick.title, [...quick.shortcut!]] as [string, string[]]] : []),
       ...(mode === "note" && notes.search?.kind === "passwords" ? [[reveal ? "가리기" : "보기", ["⌘", "R"]] as [string, string[]]] : []),
-      ...(mode === "note" ? [[graph ? "목록" : "그래프", ["⌘", "G"]] as [string, string[]]] : []), ["액션", ["⌘", "K"]]] : [];
+      ...(mode === "note" ? [[graph ? "목록" : "그래프", ["⌘", "G"]] as [string, string[]]] : []),
+      ...(graphOn ? [[local ? `로컬 ${local}단계` : "로컬", ["⌘", "L"]] as [string, string[]]] : []), ["액션", ["⌘", "K"]]] : [];
   const placeholder = ai ? "다시 물어보기"
     : mode === "store" ? "확장 검색"
     : mode === "note" ? (notes.search?.kind === "commands" ? "명령어 또는 하고 싶은 작업 (예: 포트 확인, 권한 변경)" : `${notes.search?.name ?? "노트"} 검색`)
@@ -661,7 +680,7 @@ export default function App() {
       ) : graphOn ? (
         // 노트 그래프: 왼쪽 그래프 + 오른쪽 미리보기. 검색어는 맞는 노트만 진하게
         <div className="split">
-          <NoteGraph docs={notes.docs} matches={graphMatches} selected={curDoc} loading={notes.loading}
+          <NoteGraph docs={notes.docs} matches={graphMatches} selected={curDoc} loading={notes.loading} cacheKey={notes.search?.id ?? ""} local={local}
             onSelect={d => { setPick(d); setMenu(false); }}
             onOpen={d => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` })} />
           <article className="preview md" dangerouslySetInnerHTML={{ __html: previewHtml }} />
