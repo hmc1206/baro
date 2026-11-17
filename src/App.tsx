@@ -8,7 +8,7 @@ import {
 } from "./commands";
 import { loadDocs, rank, byCategory, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
 import { ICONS } from "./icons";
-import { NoteGraph } from "./graph";
+import { NoteGraph, linkInfo } from "./graph";
 
 function Icon({ it }: { it: Item }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -349,6 +349,8 @@ export default function App() {
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
   const graphOn = mode === "note" && graph;
   const curDoc = mode === "note" ? (graphOn && pick ? pick : noteList[sel]) : undefined;
+  const links = useMemo(() => graphOn ? linkInfo(notes.docs) : null, [graphOn, notes.docs]); // 미리보기: 가는·오는 링크
+  const curLinks = curDoc && links?.get(curDoc.file);
   const graphMatches = useMemo(() => graphOn && q.trim() ? new Set(noteList.map(d => d.file)) : null, [graphOn, q, noteList]);
   const previewHtml = useMemo(() => {
     if (!curDoc) return "";
@@ -515,6 +517,8 @@ export default function App() {
     if (mode === "note" && e.metaKey && e.code === "KeyG") { e.preventDefault(); setGraph(v => !v); setPick(null); setMenu(false); return; }
     // ⌘L: 로컬 그래프 끔 → 1단계 → 2단계 → 끔
     if (graphOn && e.metaKey && e.code === "KeyL") { e.preventDefault(); setLocal(v => (v + 1) % 3); setMenu(false); return; }
+    // ⌥+방향키(이웃 노트로 이동)와 ⌘0(맞춤)은 그래프가 처리
+    if (graphOn && !menu && ((e.altKey && e.key.startsWith("Arrow")) || (e.metaKey && e.code === "Digit0"))) return;
     // ⌘↵, ⌘O 같은 동작별 단축키
     if (e.metaKey && cur && !menu) {
       const sc = e.code === "Enter" ? "⌘↵" : e.code.startsWith("Key") ? `⌘${e.code.slice(3)}` : "";
@@ -683,7 +687,21 @@ export default function App() {
           <NoteGraph docs={notes.docs} matches={graphMatches} selected={curDoc} loading={notes.loading} cacheKey={notes.search?.id ?? ""} local={local}
             onSelect={d => { setPick(d); setMenu(false); }}
             onOpen={d => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` })} />
-          <article className="preview md" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+          <div className="preview" key={curDoc?.file /* 다른 노트로 바뀌면 맨 위부터 */}>
+            <article className="md" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+            {curLinks && (
+              <div className="links">
+                {([["이 노트로 오는 링크", curLinks.inn], ["이 노트에서 가는 링크", curLinks.out]] as [string, Doc[]][]).map(([title, ds]) => (
+                  <section key={title}>
+                    <div className="links-head">{title} {ds.length}</div>
+                    {ds.length ? <div className="links-list">{ds.map(d =>
+                      <button key={d.file} className="link-item" title={d.file} onClick={() => { setPick(d); setMenu(false); }}>{d.name}</button>)}</div>
+                      : <div className="links-none">없음</div>}
+                  </section>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       ) : mode === "note" ? (
         // 노트 검색: 왼쪽 목록 + 오른쪽 노트 미리보기

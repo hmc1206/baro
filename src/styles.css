@@ -117,7 +117,9 @@ kbd { font: inherit; font-size: 11px; display: inline-block; min-width: 18px; te
 }
 .ai-saved { margin-top: 12px; color: var(--muted); font-size: 12px; }
 .graph { position: relative; flex: 0 0 58%; min-width: 0; border-right: 1px solid var(--line); }
-.graph canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+/* canvas는 칸에 맞춰 덮기만 함 (픽셀 크기가 칸 높이를 밀어 늘리지 않게) */
+.graph { min-height: 0; overflow: hidden; }
+.graph canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; cursor: grab; }
 .graph-info { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--muted); pointer-events: none; }
 @media (max-width: 600px) { .graph { flex: 0 0 55%; border-right: 0; border-bottom: 1px solid var(--line); } }
 /* 위쪽 끌기 막대 */
@@ -126,3 +128,29 @@ kbd { font: inherit; font-size: 11px; display: inline-block; min-width: 18px; te
 .grip:hover span { opacity: .9; }
 .grip + .search { padding-top: 8px; }
 @media (max-width: 600px) { .grip + .search { padding-top: 4px; } }
+/* 그래프 범례·도구 (왼쪽 위) */
+.graph-legend { position: absolute; left: 8px; top: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 4px; pointer-events: none; }
+.graph-legend button { pointer-events: auto; display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11px; color: var(--muted);
+  background: var(--pop); border: 1px solid var(--line); border-radius: 10px; padding: 2px 8px; cursor: default; }
+.graph-legend button:hover { color: var(--text); }
+.graph-legend button.on { color: var(--text); border-color: var(--accent); }
+.graph-legend button.off { opacity: .45; }
+.graph-legend i { width: 8px; height: 8px; border-radius: 50%; }
+.graph-legend button span { opacity: .6; }
+.graph-legend kbd { font-size: 10px; min-width: 14px; padding: 0 3px; }
+.graph-tools { flex-basis: 100%; display: flex; gap: 4px; }
+/* 미리보기 아래 링크 목록 */
+.links { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.links-head { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.links-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.link-item { font: inherit; font-size: 12px; color: var(--accent); background: var(--kbd); border: 0; border-radius: 5px; padding: 2px 7px; cursor: default; }
+.link-item:hover { text-decoration: underline; }
+.links-none { color: var(--muted); font-size: 12px; }
+/* 좁은 창: 범례를 한 줄로, 넘치면 가로 스크롤 */
+@media (max-width: 600px) {
+  .graph-legend { flex-wrap: nowrap; overflow-x: auto; pointer-events: auto; scrollbar-width: none; }
+  .graph-legend::-webkit-scrollbar { display: none; }
+  .graph-legend button { flex-shrink: 0; }
+  .graph-legend button span { display: none; }
+  .graph-tools { flex: 0 0 auto; order: -1; } /* 숨기기·맞춤을 앞에, 줄어들지 않게 */
+}

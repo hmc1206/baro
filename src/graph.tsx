@@ -3,8 +3,10 @@
 //  - 휠: 확대·축소 / 빈 곳 끌기: 이동 / 노드 끌기: 위치 옮기기 / 클릭: 선택 / 더블클릭: Obsidian에서 열기
 //  - 검색어와 맞는 노트만 진하게, 선택한 노트와 이웃은 강조
 //  - 로컬 그래프(⌘L): 선택한 노트에서 1·2단계 떨어진 노트만
+//  - 범례: 폴더 색, 클릭하면 그 폴더만 / 연결 없는 노트 숨기기 / 맞춤(⌘0)
+//  - ⌥+방향키: 고른 노트와 연결된 노트 중 그 방향에 있는 노트로 이동
 //  - 노드 위치를 기억해 다시 열면 같은 모양으로 바로 보임. 움직임이 멈추면 다시 그리지 않음(CPU 절약)
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Doc } from "./notes";
 
 type Node = { doc: Doc; key: string; x: number; y: number; vx: number; vy: number; deg: number; hue: number; fixed?: boolean };
@@ -12,7 +14,21 @@ type Graph = { nodes: Node[]; edges: [number, number][]; nbr: Set<number>[]; hub
 type Pos = Map<string, [number, number]>;
 
 const baseName = (file: string) => file.split("/").pop()!.replace(/\.md$/, "");
-const hueOf = (s: string) => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+// 실제 파일 위치 기준 맨 위 폴더 (모든 노트의 공통 상위 폴더 아래 첫 폴더). 머리말 category는 쓰지 않음
+function folderFn(docs: Doc[]) {
+  const dirs = docs.map(d => d.file.split("/").slice(0, -1));
+  let n = dirs[0]?.length ?? 0;
+  for (const d of dirs) { let i = 0; while (i < n && i < d.length && d[i] === dirs[0][i]) i++; n = i; }
+  return (d: Doc) => d.file.split("/").slice(0, -1)[n] ?? "(맨 위)";
+}
+
+// 폴더별 색: 노트가 많은 폴더부터 황금각(137.5°)씩 돌려 서로 잘 구분되게
+function folderHues(docs: Doc[], folderOf: (d: Doc) => string) {
+  const count = new Map<string, number>();
+  for (const d of docs) count.set(folderOf(d), (count.get(folderOf(d)) ?? 0) + 1);
+  const list = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return list.map(([name, n], i) => ({ name, n, hue: Math.round((210 + i * 137.5) % 360) }));
+}
 
 // [[대상]], [[대상|별칭]], [[대상#절]], ![[임베드]] → 대상 노트 이름
 function linksOf(d: Doc): string[] {
@@ -20,18 +36,35 @@ function linksOf(d: Doc): string[] {
   return [...out, ...d.related];
 }
 
-// 링크 연결만 계산 (위치 없이)
-function adjacency(docs: Doc[]) {
+// 방향 있는 링크 [보내는 노트, 받는 노트] (중복 제거)
+function directed(docs: Doc[]) {
   const byName = new Map<string, number>();
   docs.forEach((d, i) => { byName.set(baseName(d.file).toLowerCase(), i); if (!byName.has(d.name.toLowerCase())) byName.set(d.name.toLowerCase(), i); });
   const seen = new Set<string>();
-  const edges: [number, number][] = [];
+  const out: [number, number][] = [];
   docs.forEach((d, i) => linksOf(d).forEach(l => {
     const j = byName.get(l.toLowerCase());
-    if (j === undefined || j === i) return;
+    if (j === undefined || j === i || seen.has(`${i}>${j}`)) return;
+    seen.add(`${i}>${j}`); out.push([i, j]);
+  }));
+  return out;
+}
+
+// 노트마다 가는 링크·오는 링크 (미리보기용)
+export function linkInfo(docs: Doc[]) {
+  const m = new Map<string, { out: Doc[]; inn: Doc[] }>(docs.map(d => [d.file, { out: [], inn: [] }]));
+  for (const [i, j] of directed(docs)) { m.get(docs[i].file)!.out.push(docs[j]); m.get(docs[j].file)!.inn.push(docs[i]); }
+  return m;
+}
+
+// 링크 연결만 계산 (위치 없이, 방향 없음)
+function adjacency(docs: Doc[]) {
+  const seen = new Set<string>();
+  const edges: [number, number][] = [];
+  for (const [i, j] of directed(docs)) {
     const k = i < j ? `${i}-${j}` : `${j}-${i}`;
     if (!seen.has(k)) { seen.add(k); edges.push([i, j]); }
-  }));
+  }
   const nbr = docs.map(() => new Set<number>());
   edges.forEach(([a, b]) => { nbr[a].add(b); nbr[b].add(a); });
   return { edges, nbr };
@@ -67,14 +100,14 @@ function around(nbr: Set<number>[], root: number, depth: number): number[] {
   return [...seen].sort((a, b) => a - b);
 }
 
-function build(docs: Doc[], cacheKey: string, local: boolean): Graph {
+function build(docs: Doc[], cacheKey: string, local: boolean, partial: boolean, hues: Map<string, number>, folderOf: (d: Doc) => string): Graph {
   const { edges, nbr } = adjacency(docs);
   const saved = loadPos(cacheKey);
   // 처음 위치: 기억한 위치 → 없으면 기억한 이웃 근처 → 그것도 없으면 해바라기 배치(겹치지 않게 고르게 퍼짐)
   const nodes: Node[] = docs.map((doc, i) => {
     const r = 12 * Math.sqrt(i + 1), t = i * 2.39996;
     const [x, y] = saved.get(doc.file) ?? [r * Math.cos(t), r * Math.sin(t)];
-    return { doc, key: doc.file, x, y, vx: 0, vy: 0, deg: nbr[i].size, hue: hueOf(doc.category.split("/")[0]) };
+    return { doc, key: doc.file, x, y, vx: 0, vy: 0, deg: nbr[i].size, hue: hues.get(folderOf(doc)) ?? 0 };
   });
   let known = 0;
   nodes.forEach((n, i) => {
@@ -85,7 +118,7 @@ function build(docs: Doc[], cacheKey: string, local: boolean): Graph {
   // 축소 상태에서 이름을 보여 줄 노트: 연결 수 상위 15개 (최소 6개 이상 연결)
   const hub = Math.max(6, nbr.map(x => x.size).sort((a, b) => b - a)[14] ?? 0);
   // 대부분 위치를 기억하고 있으면 살짝만 다시 정리 (로컬 그래프는 모여야 하므로 항상 새로 배치)
-  return { nodes, edges, nbr, hub, warm: !local && known >= nodes.length * .8, local, cacheKey };
+  return { nodes, edges, nbr, hub, warm: !local && known >= nodes.length * .8, local: partial, cacheKey };
 }
 
 const radius = (n: Node, zoom = 1) => (3 + Math.sqrt(n.deg) * 2.2) / Math.sqrt(Math.min(zoom, 1));
@@ -95,13 +128,27 @@ export function NoteGraph({ docs, matches, selected, loading, cacheKey = "", loc
   onSelect: (d: Doc) => void; onOpen: (d: Doc) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const legend = useRef<HTMLDivElement>(null);
+  const [folder, setFolder] = useState<string | null>(null); // 범례에서 고른 폴더만 보기
+  const [noOrphans, setNoOrphans] = useState(false); // 연결 없는 노트 숨기기
   const adj = useMemo(() => adjacency(docs), [docs]);
+  const folderOf = useMemo(() => folderFn(docs), [docs]);
+  const folders = useMemo(() => folderHues(docs, folderOf), [docs, folderOf]);
+  const hues = useMemo(() => new Map(folders.map(f => [f.name, f.hue])), [folders]);
   const root = local && selected ? docs.findIndex(d => d.file === selected.file) : -1;
-  // 로컬 그래프에 넣을 노트 (번호 목록을 문자열로 바꿔 같은 집합이면 다시 만들지 않음)
-  const keep = root >= 0 ? around(adj.nbr, root, local).join(",") : "";
-  const g = useMemo(() => build(keep ? keep.split(",").map(i => docs[+i]) : docs, cacheKey, !!keep), [docs, keep, cacheKey]);
+  // 보여 줄 노트 (번호 목록을 문자열로 바꿔 같은 집합이면 다시 만들지 않음). 로컬 → 폴더 → 연결 없는 노트 순서로 거름
+  let idx = root >= 0 ? around(adj.nbr, root, local) : null;
+  if (folder) idx = (idx ?? docs.map((_, i) => i)).filter(i => i === root || folderOf(docs[i]) === folder);
+  if (noOrphans) { // 지금 보이는 노트끼리 연결이 없는 노트 숨기기
+    const on = new Set(idx ?? docs.map((_, i) => i));
+    idx = [...on].filter(i => i === root || [...adj.nbr[i]].some(j => on.has(j)));
+  }
+  const keep = idx ? idx.join(",") : "";
+  const g = useMemo(() => build(idx ? (keep ? keep.split(",").map(i => docs[+i]) : []) : docs, cacheKey, root >= 0, !!idx, hues, folderOf),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [docs, keep, idx === null, cacheKey, hues, root >= 0]);
   // 화면 상태는 렌더링 없이 바뀌므로 ref에 보관. kick: 다음 프레임 그리기 예약
-  const st = useRef({ zoom: 1, ox: 0, oy: 0, alpha: 1, hover: -1, touched: false, kick: () => {}, drag: null as null | { node: number; moved: boolean; sx: number; sy: number; ox: number; oy: number } });
+  const st = useRef({ zoom: 1, ox: 0, oy: 0, alpha: 1, hover: -1, touched: false, refit: false, kick: () => {}, drag: null as null | { node: number; moved: boolean; sx: number; sy: number; ox: number; oy: number } });
   const props = useRef({ matches, selected, onSelect, onOpen });
   props.current = { matches, selected, onSelect, onOpen };
 
@@ -117,6 +164,7 @@ export function NoteGraph({ docs, matches, selected, loading, cacheKey = "", loc
       const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
       w = r.width; h = r.height; c.width = w * dpr; c.height = h * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (!s.touched) s.refit = true; // 창 크기가 바뀌면 다시 전체 맞춤 (직접 움직였으면 그대로)
       kick();
     };
     const ro = new ResizeObserver(resize); ro.observe(c); resize();
@@ -200,14 +248,16 @@ export function NoteGraph({ docs, matches, selected, loading, cacheKey = "", loc
       if (s.touched || !g.nodes.length || !w) return;
       let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
       for (const n of g.nodes) { x0 = Math.min(x0, n.x); x1 = Math.max(x1, n.x); y0 = Math.min(y0, n.y); y1 = Math.max(y1, n.y); }
-      const z = Math.min(2, (w - 40) / Math.max(x1 - x0, 1), (h - 50) / Math.max(y1 - y0, 1));
-      s.zoom = z; s.ox = -(x0 + x1) / 2 * z; s.oy = -(y0 + y1) / 2 * z;
+      const top = legend.current ? legend.current.offsetHeight + 8 : 0; // 범례 아래부터 맞춤
+      const z = Math.min(2, (w - 40) / Math.max(x1 - x0, 1), (h - 50 - top) / Math.max(y1 - y0, 1));
+      s.zoom = z; s.ox = -(x0 + x1) / 2 * z; s.oy = -(y0 + y1) / 2 * z + top / 2;
     };
     // 움직이는 동안만 매 프레임 계산·그리기. 멈추면 위치를 저장하고 다음 변화(마우스·선택·크기)까지 쉼
     function frame() {
       raf = 0;
       const moving = s.alpha > .002;
-      if (moving) { tick(); fit(); }
+      if (moving) tick();
+      if (moving || s.refit) { s.refit = false; fit(); }
       draw();
       if (s.alpha > .002) kick();
       else if (moving) savePos(g);
@@ -264,11 +314,36 @@ export function NoteGraph({ docs, matches, selected, loading, cacheKey = "", loc
       kick();
     };
     const leave = () => { s.hover = -1; kick(); };
+    // ⌘0: 전체가 보이게 맞춤 / ⌥+방향키: 연결된 노트 중 그 방향에 있는 노트로 이동
+    const key = (e: KeyboardEvent) => {
+      if (e.metaKey && e.code === "Digit0") { e.preventDefault(); s.touched = false; s.refit = true; kick(); return; }
+      const dir = e.altKey && !e.metaKey && ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, number[]>)[e.key];
+      if (!dir) return;
+      e.preventDefault();
+      const sel = props.current.selected;
+      const from = sel ? g.nodes.findIndex(n => n.key === sel.file) : -1;
+      if (from < 0) { // 아직 고른 노트가 없으면 연결이 가장 많은 노트부터
+        const hub = g.nodes.reduce((b, n, i) => n.deg > (g.nodes[b]?.deg ?? -1) ? i : b, -1);
+        if (hub >= 0) props.current.onSelect(g.nodes[hub].doc);
+        return;
+      }
+      const p = g.nodes[from];
+      let best = -1, bs = -Infinity;
+      for (const j of g.nbr[from]) {
+        const q = g.nodes[j], dx = q.x - p.x, dy = q.y - p.y, d = Math.hypot(dx, dy) || 1;
+        const cos = (dx * dir[0] + dy * dir[1]) / d;
+        if (cos < .35) continue; // 대략 그 방향(±70°)에 있는 것만
+        const sc = cos * 2 - d / 400; // 방향이 잘 맞고 가까울수록
+        if (sc > bs) { bs = sc; best = j; }
+      }
+      if (best >= 0) props.current.onSelect(g.nodes[best].doc);
+    };
+    window.addEventListener("keydown", key);
     scheme.addEventListener("change", kick);
     c.addEventListener("mousedown", down); window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
     c.addEventListener("dblclick", dbl); c.addEventListener("wheel", wheel, { passive: false }); c.addEventListener("mouseleave", leave);
     return () => {
-      cancelAnimationFrame(raf); ro.disconnect(); scheme.removeEventListener("change", kick);
+      cancelAnimationFrame(raf); ro.disconnect(); scheme.removeEventListener("change", kick); window.removeEventListener("keydown", key);
       if (s.alpha > .002) savePos(g); // 정리 중에 닫아도 지금 위치 기억
       c.removeEventListener("mousedown", down); window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
       c.removeEventListener("dblclick", dbl); c.removeEventListener("wheel", wheel); c.removeEventListener("mouseleave", leave);
@@ -290,10 +365,25 @@ export function NoteGraph({ docs, matches, selected, loading, cacheKey = "", loc
   }, [selected, g]);
 
   const linked = g.nodes.filter(n => n.deg > 0).length;
+  const fitNow = () => { const s = st.current; s.touched = false; s.refit = true; s.kick(); };
   return (
     <div className="graph">
       <canvas ref={canvas} />
-      <div className="graph-info">{loading ? "노트 불러오는 중… (외장 디스크는 처음에 몇 초 걸려요)" : <>{g.local ? `로컬 ${local}단계 · ` : ""}{matches ? (matches.size ? `검색 결과 ${matches.size}개 · ` : "일치하는 노트가 없어요 · ") : ""}노트 {g.nodes.length}개 · 링크 {g.edges.length}개{!matches && linked < g.nodes.length ? ` · 연결 없는 노트 ${g.nodes.length - linked}개` : ""}</>}</div>
+      {!loading && docs.length > 0 && (
+        <div className="graph-legend" ref={legend}>
+          {folders.length > 1 && folders.slice(0, 10).map(f => (
+            <button key={f.name} className={folder === f.name ? "on" : folder ? "off" : ""} title={`${f.name}만 보기 (다시 누르면 전체)`}
+              onClick={() => setFolder(v => v === f.name ? null : f.name)}>
+              <i style={{ background: `hsl(${f.hue} 60% 55%)` }} />{f.name}<span>{f.n}</span>
+            </button>
+          ))}
+          <div className="graph-tools">
+            <button className={noOrphans ? "on" : ""} onClick={() => setNoOrphans(v => !v)}>연결 없는 노트 숨기기</button>
+            <button onClick={fitNow}>맞춤 <kbd>⌘</kbd><kbd>0</kbd></button>
+          </div>
+        </div>
+      )}
+      <div className="graph-info">{loading ? "노트 불러오는 중… (외장 디스크는 처음에 몇 초 걸려요)" : <>{root >= 0 ? `로컬 ${local}단계 · ` : ""}{folder ? `${folder} · ` : ""}{matches ? (matches.size ? `검색 결과 ${matches.size}개 · ` : "일치하는 노트가 없어요 · ") : ""}노트 {g.nodes.length}개 · 링크 {g.edges.length}개{!matches && linked < g.nodes.length ? ` · 연결 없는 노트 ${g.nodes.length - linked}개` : ""}</>}</div>
     </div>
   );
 }
