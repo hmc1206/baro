@@ -117,8 +117,80 @@ pub fn create(dir: &str, name: &str, content: &str) -> Result<String, String> {
     Ok(p.to_string_lossy().into_owned())
 }
 
+// 할 일 줄("- [ ] 내용", "1. [x] 내용", 인용 안 "> - [ ]" 포함)이면 (괄호 안 글자 위치, 체크 여부, 내용)
+fn task_marker(line: &str) -> Option<(usize, bool, &str)> {
+    let b = line.as_bytes();
+    let mut i = 0;
+    let ws = |i: &mut usize| { while *i < b.len() && (b[*i] == b' ' || b[*i] == b'\t') { *i += 1; } };
+    ws(&mut i);
+    while i < b.len() && b[i] == b'>' { i += 1; ws(&mut i); }
+    if i < b.len() && matches!(b[i], b'-' | b'*' | b'+') { i += 1; }
+    else {
+        let s = i;
+        while i < b.len() && b[i].is_ascii_digit() { i += 1; }
+        if i == s || i >= b.len() || !matches!(b[i], b'.' | b')') { return None; }
+        i += 1;
+    }
+    let s = i; ws(&mut i);
+    if i == s || i + 3 > b.len() || b[i] != b'[' || b[i + 2] != b']' || !matches!(b[i + 1], b' ' | b'x' | b'X') { return None; }
+    let pos = i + 1;
+    let s = i + 3; let mut j = s; ws(&mut j);
+    if j == s { return None; }
+    Some((pos, b[pos] != b' ', line[j..].trim()))
+}
+
+// index번째 할 일 줄을 체크/해제. 코드 블록 안과 머리말은 세지 않음 (화면의 체크박스 순서와 같게).
+// 화면이 본 내용(text)과 파일의 그 줄이 다르면 바뀐 것으로 보고 고치지 않음
+pub fn toggle_task(dir: &str, file: &str, index: usize, text: &str, done: bool) -> Result<(), String> {
+    let f = inside(dir, file)?;
+    let src = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
+    let mut start = 0;
+    if src.starts_with("---\n") {
+        if let Some(e) = src[4..].find("\n---") { start = src[4 + e + 1..].find('\n').map(|k| 4 + e + 1 + k + 1).unwrap_or(src.len()); }
+    }
+    let (mut off, mut n, mut fence) = (start, 0usize, "");
+    for line in src[start..].split_inclusive('\n') {
+        let l = line.trim_end_matches(['\n', '\r']);
+        let tr = l.trim_start();
+        let f3 = if tr.starts_with("```") { "```" } else if tr.starts_with("~~~") { "~~~" } else { "" };
+        if !f3.is_empty() { if fence.is_empty() { fence = f3; } else if f3 == fence { fence = ""; } }
+        else if fence.is_empty() {
+            if let Some((pos, _, rest)) = task_marker(l) {
+                if n == index {
+                    if rest != text.trim() { return Err("노트 내용이 바뀌었어요. 목록을 다시 열어 주세요.".into()); }
+                    let mut out = src.clone();
+                    out.replace_range(off + pos..off + pos + 1, if done { "x" } else { " " });
+                    let tmp = f.with_extension("md.baro-tmp");
+                    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
+                    return std::fs::rename(&tmp, &f).map_err(|e| e.to_string());
+                }
+                n += 1;
+            }
+        }
+        off += line.len();
+    }
+    Err("체크할 항목을 찾지 못했어요. 목록을 다시 열어 주세요.".into())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn toggle_task_skips_code_and_checks_text() {
+        let dir = std::env::temp_dir().join(format!("baro-task-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("단계.md");
+        std::fs::write(&f, "---\nstatus: todo\n---\n# 단계\n```\n- [ ] 코드 안\n```\n- [ ] 첫째\n  - [x] 둘째\n1. [ ] 셋째\n> - [ ] 넷째\n").unwrap();
+        let (d, p) = (dir.to_string_lossy().to_string(), f.to_string_lossy().to_string());
+        super::toggle_task(&d, &p, 1, "둘째", false).unwrap();
+        super::toggle_task(&d, &p, 2, "셋째", true).unwrap();
+        super::toggle_task(&d, &p, 3, "넷째", true).unwrap();
+        assert!(super::toggle_task(&d, &p, 0, "다른 글", true).is_err());
+        assert!(super::toggle_task(&d, &p, 9, "없음", true).is_err());
+        let t = std::fs::read_to_string(&f).unwrap();
+        assert_eq!(t, "---\nstatus: todo\n---\n# 단계\n```\n- [ ] 코드 안\n```\n- [ ] 첫째\n  - [ ] 둘째\n1. [x] 셋째\n> - [x] 넷째\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn save_ai_never_overwrites() {
         let dir = std::env::temp_dir().join(format!("baro-ai-test-{}", std::process::id()));

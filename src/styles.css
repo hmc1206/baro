@@ -154,3 +154,8 @@ kbd { font: inherit; font-size: 11px; display: inline-block; min-width: 18px; te
   .graph-legend button span { display: none; }
   .graph-tools { flex: 0 0 auto; order: -1; } /* 숨기기·맞춤을 앞에, 줄어들지 않게 */
 }
+/* 커리큘럼: 진도 막대와 누를 수 있는 체크박스 */
+.md progress { display: block; width: 100%; height: 6px; margin: 0 0 10px; accent-color: var(--accent); }
+.md li:has(> input[type=checkbox]) { list-style: none; margin-left: -18px; }
+.md input[type=checkbox] { margin: 0 6px 0 0; vertical-align: -1px; }
+.tasks input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }

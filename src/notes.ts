@@ -3,22 +3,41 @@
 //  notes:    일반 노트 — 제목·태그·본문 검색, 코드 블록을 예시로
 //  snippets: 스니펫 모음 — 노트 하나 = 붙여넣을 문구 하나
 //  passwords: 비밀번호 모음 — 노트 하나 = 계정 하나. 머리말 password(·login·ssh·key_file)를 가려서 보여 주고 수정
+//  curriculum: 커리큘럼 — 노트 하나 = 단계 하나. 머리말 status·week와 체크박스 진도, 미리보기에서 바로 체크
 import { invoke } from "@tauri-apps/api/core";
 
-export type NoteKind = "commands" | "notes" | "snippets" | "passwords";
+export type NoteKind = "commands" | "notes" | "snippets" | "passwords" | "curriculum";
 export type NoteSearch = { id: string; name: string; dir: string; kind: NoteKind };
 export const KIND_LABELS: Record<NoteKind, { title: string; desc: string; glyph: string }> = {
   commands: { title: "명령어 사전", desc: "머리말(command·category·aliases·summary)과 예시 표·코드를 읽어 예시를 바로 붙여넣기", glyph: "terminal" },
   notes: { title: "일반 노트", desc: "제목·태그·본문으로 찾고 미리보기, 코드 블록은 복사·붙여넣기", glyph: "doc" },
   snippets: { title: "스니펫 모음", desc: "노트 하나가 문구 하나. 고르면 본문을 바로 붙여넣기", glyph: "snippet" },
   passwords: { title: "비밀번호 모음", desc: "머리말 password를 가려서 보여 주고 복사·붙여넣기·수정, 새 노트 추가", glyph: "lock" },
+  curriculum: { title: "커리큘럼", desc: "단계별 상태(status)·기간(week)·체크박스 진도를 보고, 미리보기에서 바로 체크, ⌘D로 상태 바꾸기", glyph: "curriculum" },
 };
+
+// 체크박스 할 일. 순서는 미리보기의 체크박스 순서와 같음 (코드 블록 안은 제외 — Rust wiki::toggle_task와 같은 규칙)
+export type Task = { done: boolean; text: string };
+const TASK = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(.*)$/;
+export function tasksOf(body: string): Task[] {
+  const out: Task[] = [];
+  let fence = "";
+  for (const line of body.split("\n")) {
+    const f = line.trim().match(/^(```|~~~)/)?.[1];
+    if (f) { if (!fence) fence = f; else if (f === fence) fence = ""; continue; }
+    if (fence) continue;
+    const m = line.replace(/\r$/, "").match(TASK);
+    if (m) out.push({ done: m[1] !== " ", text: m[2].trim() });
+  }
+  return out;
+}
 
 export type Example = { cmd: string; desc: string };
 export type Doc = {
   name: string; category: string; summary: string; aliases: string[]; related: string[];
   markdown: string; body: string; examples: Example[]; file: string; stub: boolean;
   meta: Record<string, string>; // 머리말의 한 줄 값 (비밀번호 모음: password, login, ssh, key_file …)
+  tasks?: Task[]; // 커리큘럼: 체크박스
 };
 type Note = { file: string; folder: string; text: string };
 
@@ -134,7 +153,7 @@ export async function loadDocs(search: NoteSearch): Promise<Doc[]> {
         markdown: toMarkdown(text, chapters), body: text, examples: [], file: n.file, stub: false, meta,
       };
     }
-    const name = String(data.title ?? (search.kind === "notes" ? heading : undefined) ?? baseName(n.file));
+    const name = String(data.title ?? (search.kind === "notes" || search.kind === "curriculum" ? heading : undefined) ?? baseName(n.file));
     const aliases = [...toList(data.aliases), ...toList(data.tags).map(t => t.replace(/^#/, ""))];
     // 스니펫은 머리말과 맨 위 제목(파일 이름과 같을 때)을 뺀 본문이 붙여넣을 문구
     const snippet = heading && heading === name && text.startsWith(`# ${heading}`) ? text.slice(heading.length + 2).trim() : text;
@@ -145,6 +164,7 @@ export async function loadDocs(search: NoteSearch): Promise<Doc[]> {
       markdown: toMarkdown(search.kind === "snippets" ? snippet : text, chapters),
       body: search.kind === "snippets" ? snippet : text,
       examples: search.kind === "notes" ? codeBlocks(text) : [], file: n.file, stub: false, meta,
+      tasks: search.kind === "curriculum" ? tasksOf(body) : undefined,
     };
   });
 }

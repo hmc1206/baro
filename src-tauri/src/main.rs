@@ -387,6 +387,12 @@ fn note_set_field(id: String, file: String, key: String, value: String, app: App
     wiki::set_field(&note_dir(&app, &id)?, &file, &key, &value)
 }
 
+// 커리큘럼: 노트의 index번째 체크박스 체크/해제
+#[tauri::command]
+fn note_toggle_task(id: String, file: String, index: usize, text: String, done: bool, app: AppHandle) -> Result<(), String> {
+    wiki::toggle_task(&note_dir(&app, &id)?, &file, index, &text, done)
+}
+
 // 노트 검색 폴더에 새 노트 만들기
 #[tauri::command]
 fn note_create(id: String, name: String, content: String, app: AppHandle) -> Result<String, String> {
@@ -458,6 +464,16 @@ async fn pick_folder(start: String, app: AppHandle, win: WebviewWindow) -> Optio
 fn main() {
     // 단축키는 설정 파일의 hotkeys에서 읽음 (기본: Baro ⌥Space, 리눅스 명령어 노트 검색 ⌥L). Baro의 "단축키 설정"에서 변경
     tauri::Builder::default()
+        // 안전장치: Baro 창이 앱 화면 밖(웹사이트)으로 이동하지 않게. http(s) 주소는 기본 브라우저로 열고 창은 그대로
+        .plugin(tauri::plugin::Builder::<tauri::Wry>::new("nav-guard")
+            .on_navigation(|_webview, url| {
+                let local = matches!(url.scheme(), "tauri" | "asset")
+                    || url.host_str() == Some("tauri.localhost")
+                    || (url.host_str() == Some("localhost") && url.port() == Some(1420)); // 개발 서버
+                if local { return true; }
+                if matches!(url.scheme(), "http" | "https" | "mailto") { let _ = open::that_detached(url.as_str()); }
+                false
+            }).build())
         .plugin(tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, sc, ev| {
                 if ev.state() != ShortcutState::Pressed { return; }
@@ -517,7 +533,7 @@ fn main() {
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, note_set_field, note_create, save_note_search, delete_note_search, pick_folder,
+            notes_load, note_set_field, note_toggle_task, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed])
         .run(tauri::generate_context!())
         .expect("Baro 실행 실패");

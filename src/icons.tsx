@@ -2,7 +2,7 @@
 import {
   AppWindow, Calculator, FolderSearch, Waypoints, Plus, Pin, PinOff, Contrast, Download, ExternalLink, File, FileText, Globe, Keyboard, Lock, Maximize2,
   Moon, PanelBottom, PanelLeft, PanelRight, PanelTop, Power, Puzzle, Search, Settings, ShieldCheck, Sparkles,
-  Square, Terminal, TextQuote, Trash2, TriangleAlert, VolumeX, type LucideIcon,
+  Square, Terminal, TextQuote, Trash2, TriangleAlert, VolumeX, GraduationCap, Circle, CircleDot, CircleCheck, type LucideIcon,
 } from "lucide-react";
 
 export const ICONS: Record<string, LucideIcon> = {
@@ -11,4 +11,5 @@ export const ICONS: Record<string, LucideIcon> = {
   left: PanelLeft, right: PanelRight, top: PanelTop, power: Power, puzzle: Puzzle, search: Search,
   settings: Settings, shield: ShieldCheck, ai: Sparkles, center: Square, terminal: Terminal, snippet: TextQuote,
   trash: Trash2, warn: TriangleAlert, mute: VolumeX,
+  curriculum: GraduationCap, todo: Circle, doing: CircleDot, done: CircleCheck,
 };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
@@ -77,6 +77,10 @@ type Hk = { keys: Record<string, string>; recording: string | null; error: strin
 // 비밀번호 모음: 수정(doc 있음) 또는 새 노트 추가(doc 없음)
 type PwDraft = { doc: Doc | null; name: string; title: string; password: string; error: string | null; saving: boolean };
 const MASK = "••••••••";
+// 커리큘럼 상태: 머리말 status 값 → 표시 이름, ⌘D로 다음 상태
+const STATUS: Record<string, string> = { todo: "할 일", doing: "진행 중", "in-progress": "진행 중", done: "완료" };
+const nextStatus = (s: string) => s === "todo" || !s ? "doing" : s === "done" ? "todo" : "done";
+const weekLabel = (w?: string) => !w ? "" : /^[\d\s~-]+$/.test(w) ? `${w.replace(/-/g, "~")}주` : w;
 // 노트 검색별로 읽은 노트 (창을 다시 열 때 바로 보여 주기용). sig: 내용이 바뀌었는지 비교
 const docCache = new Map<string, { docs: Doc[]; sig: string }>();
 function docsSig(docs: Doc[]) {
@@ -196,6 +200,28 @@ export default function App() {
       .catch(e => setNotes(n => mine(n) ? { ...n, loading: false, error: cached ? null : String(e) } : n));
   };
   const openGraph = () => openNotes("__vault", true);
+  // 지금 노트 검색을 화면 상태는 그대로 두고 다시 읽기 (체크·상태 변경 뒤)
+  const reloadDocs = async () => {
+    const s = notes.search;
+    if (!s) return;
+    const docs = await loadDocs(s);
+    docCache.set(s.id, { docs, sig: docsSig(docs) });
+    setNotes(n => n.search?.id === s.id ? { ...n, docs } : n);
+  };
+  const failNote = (title: string) => (e: unknown) => { setAi(null); setView({ kind: "text", title, text: String(e), error: true }); };
+  const setStatus = (d: Doc, value: string) => invoke("note_set_field", { id: notes.search!.id, file: d.file, key: "status", value })
+    .then(reloadDocs).catch(failNote("상태를 바꾸지 못했어요"));
+  // 커리큘럼 미리보기의 체크박스 클릭 → 노트 파일에 체크/해제
+  const onPreviewClick = (e: MouseEvent<HTMLElement>) => {
+    const el = e.target as HTMLElement;
+    if (!(el instanceof HTMLInputElement) || el.type !== "checkbox" || notes.search?.kind !== "curriculum" || !curDoc?.tasks) return;
+    e.preventDefault(); // 화면은 파일을 고친 뒤 다시 읽어서 바꿈
+    const boxes = Array.from(e.currentTarget.querySelectorAll("input[type=checkbox]"));
+    const i = boxes.indexOf(el), task = curDoc.tasks[i];
+    if (!task || boxes.length !== curDoc.tasks.length) return;
+    invoke("note_toggle_task", { id: notes.search.id, file: curDoc.file, index: i, text: task.text, done: !task.done })
+      .then(reloadDocs).catch(failNote("체크하지 못했어요"));
+  };
   const openFiles = () => { setFound({ items: [], loading: false }); enter("files"); };
   // 비밀번호 수정·새 노트 저장 후 노트 다시 읽기
   const savePw = async () => {
@@ -255,8 +281,10 @@ export default function App() {
 
   // 노트 검색: 검색어가 없으면 분류(폴더)별 전체, 있으면 점수순
   const noteList = useMemo(
-    () => mode === "note" ? (q.trim() ? rank(notes.docs, q).slice(0, 80) : byCategory(notes.docs)) : [],
-    [mode, notes.docs, q]);
+    () => mode === "note" ? (q.trim() ? rank(notes.docs, q).slice(0, 80)
+      : notes.search?.kind === "curriculum" ? [...notes.docs].sort((a, b) => a.file.localeCompare(b.file, undefined, { numeric: true }))
+      : byCategory(notes.docs)) : [],
+    [mode, notes.docs, q, notes.search?.kind]);
   const noteItem = (d: Doc): Item => {
     const kind = notes.search?.kind ?? "notes";
     const obsidian: Action = { title: "Obsidian에서 열기", shortcut: "⌘O",
@@ -273,6 +301,14 @@ export default function App() {
           ...(ssh ? [{ title: "접속 명령 복사", run: () => copy(ssh) }, { title: "접속 명령 붙여넣기", run: () => pasteText(ssh) }] : []),
           obsidian, finder,
         ] };
+    }
+    if (kind === "curriculum") {
+      const tasks = d.tasks ?? [], n = tasks.filter(x => x.done).length, st = d.meta.status || "todo", next = nextStatus(st);
+      return { id: `n-${d.file}`, title: d.name, kind: "wiki",
+        glyph: st === "done" ? "done" : STATUS[st] === "진행 중" ? "doing" : "todo",
+        subtitle: [STATUS[st] ?? st, weekLabel(d.meta.week), tasks.length ? `${n}/${tasks.length}` : ""].filter(Boolean).join(" · "),
+        actions: [obsidian, { title: `상태를 "${STATUS[next]}"(으)로`, shortcut: "⌘D", keep: true, run: () => setStatus(d, next) },
+          finder, { title: "이름 복사", run: () => copy(d.name) }] };
     }
     const pick = kind === "commands" ? "예시 골라서 쓰기" : "코드 골라서 쓰기";
     const actions: Action[] = kind === "snippets" ? [
@@ -363,6 +399,14 @@ export default function App() {
         curDoc.meta.ssh ? `**접속** \`${curDoc.meta.ssh}\`` : ""].filter(Boolean).join("  \n");
       if (info) md = `> ${info.replace(/\n/g, "\n> ")}\n\n${md}`;
     }
+    if (notes.search?.kind === "curriculum") {
+      const tasks = curDoc.tasks ?? [], n = tasks.filter(x => x.done).length, st = curDoc.meta.status || "todo";
+      const info = [tasks.length ? `**진도** ${n}/${tasks.length} (${Math.round(n / tasks.length * 100)}%)` : "",
+        `**상태** ${STATUS[st] ?? st}`, curDoc.meta.week ? `**기간** ${weekLabel(curDoc.meta.week)}` : ""].filter(Boolean).join(" · ");
+      const bar = tasks.length ? `<progress value="${n}" max="${tasks.length}"></progress>\n\n` : "";
+      return bar + (marked.parse(`> ${info}\n\n${md}`, { async: false }) as string).replace(/<input disabled="" type="checkbox"/g, '<input type="checkbox"')
+        .replace(/<input checked="" disabled="" type="checkbox"/g, '<input checked="" type="checkbox"');
+    }
     return marked.parse(md, { async: false }) as string;
   }, [curDoc, reveal, notes.search?.kind]);
 
@@ -380,6 +424,20 @@ export default function App() {
   };
   const shownRef = useRef(onShown);
   shownRef.current = onShown;
+
+  // 미리보기·답변 안의 링크는 Baro 창 안에서 열지 않고 기본 브라우저(로그인·쿠키 그대로)로
+  useEffect(() => {
+    const onLink = (e: globalThis.MouseEvent) => {
+      const a = (e.target as Element | null)?.closest?.("a[href]");
+      if (!a) return;
+      const href = a.getAttribute("href") ?? "";
+      if (href.startsWith("#")) return; // 같은 문서 안 이동은 그대로
+      e.preventDefault();
+      if (/^(https?|mailto|obsidian):/i.test(href)) invoke("open_url", { url: href });
+    };
+    document.addEventListener("click", onLink, true);
+    return () => document.removeEventListener("click", onLink, true);
+  }, []);
 
   useEffect(() => {
     const uns = [
@@ -707,7 +765,8 @@ export default function App() {
         // 노트 검색: 왼쪽 목록 + 오른쪽 노트 미리보기
         <div className="split">
           {listEl}
-          <article className="preview md" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+          <article className={`preview md${notes.search?.kind === "curriculum" ? " tasks" : ""}`} onClick={onPreviewClick}
+            dangerouslySetInnerHTML={{ __html: previewHtml }} />
         </div>
       ) : listEl}
       {menu && cur && !ai && !view && (
