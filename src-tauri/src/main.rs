@@ -393,6 +393,50 @@ fn note_toggle_task(id: String, file: String, index: usize, text: String, done: 
     wiki::toggle_task(&note_dir(&app, &id)?, &file, index, &text, done)
 }
 
+// 빠른 메모: 오늘 Daily 노트에 한 줄 추가
+#[tauri::command]
+fn memo_daily(date: String, time: String, text: String, app: AppHandle) -> Result<String, String> {
+    let c = config::load(&config_file(&app))?;
+    wiki::append_daily(&c.vault_dir, &date, &time, &text)
+}
+
+// 빠른 메모 기록 지우기·되돌리기. section이 "daily"면 오늘 Daily(date), 아니면 커리큘럼 단계 노트(id·file)의 그 칸
+#[derive(serde::Serialize)]
+struct Removed { line: usize, text: String }
+
+#[tauri::command]
+fn memo_remove(id: String, file: String, date: String, section: String, index: usize, first: String, app: AppHandle) -> Result<Removed, String> {
+    let (line, text) = if section == "daily" {
+        wiki::remove_daily(&config::load(&config_file(&app))?.vault_dir, &date, index, &first)?
+    } else { wiki::remove_record(&note_dir(&app, &id)?, &file, &section, index, &first)? };
+    Ok(Removed { line, text })
+}
+
+#[tauri::command]
+fn memo_restore(id: String, file: String, date: String, section: String, line: usize, text: String, app: AppHandle) -> Result<(), String> {
+    if section == "daily" { wiki::restore_daily(&config::load(&config_file(&app))?.vault_dir, &date, line, &text) }
+    else { wiki::restore_record(&note_dir(&app, &id)?, &file, line, &text) }
+}
+
+// 빠른 메모: 오늘 Daily 노트 읽기 (이미 적은 메모 보기)
+#[tauri::command]
+fn memo_daily_read(date: String, app: AppHandle) -> String {
+    config::load(&config_file(&app)).map(|c| wiki::read_daily(&c.vault_dir, &date)).unwrap_or_default()
+}
+
+// 빠른 메모: 커리큘럼 단계 노트의 "내 기록" 칸에 추가
+#[tauri::command]
+fn note_add_record(id: String, file: String, section: String, block: String, app: AppHandle) -> Result<(), String> {
+    wiki::add_record(&note_dir(&app, &id)?, &file, &section, &block)
+}
+
+// 클립보드 글자 (명령어 기록용)
+#[tauri::command]
+fn clipboard_text() -> Result<String, String> {
+    let out = std::process::Command::new("pbpaste").output().map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 // 노트 검색 폴더에 새 노트 만들기
 #[tauri::command]
 fn note_create(id: String, name: String, content: String, app: AppHandle) -> Result<String, String> {
@@ -533,7 +577,7 @@ fn main() {
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, note_set_field, note_toggle_task, note_create, save_note_search, delete_note_search, pick_folder,
+            notes_load, note_set_field, note_toggle_task, note_add_record, memo_daily, memo_daily_read, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed])
         .run(tauri::generate_context!())
         .expect("Baro 실행 실패");

@@ -159,3 +159,20 @@ kbd { font: inherit; font-size: 11px; display: inline-block; min-width: 18px; te
 .md li:has(> input[type=checkbox]) { list-style: none; margin-left: -18px; }
 .md input[type=checkbox] { margin: 0 6px 0 0; vertical-align: -1px; }
 .tasks input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
+/* 빠른 메모: 여러 줄 입력칸과 오른쪽 기록 */
+textarea.search { resize: none; display: block; line-height: 1.4; font-family: inherit; overflow-y: auto; }
+.memo-rec .rec { padding: 6px 10px 2px; margin-bottom: 8px; border-radius: 8px; border: 1px solid transparent; }
+.memo-rec .rec.on { border-color: var(--accent); background: var(--sel); }
+.memo-rec h4 { font-size: 12px; margin: 0 0 4px; color: var(--muted); }
+.memo-rec .rec.on h4 { color: var(--text); }
+.memo-rec h4 span { font-weight: normal; color: var(--muted); }
+.memo-rec .none { color: var(--muted); font-size: 12px; }
+/* 기록 항목 지우기 버튼: 마우스를 올리면 보임, 한 번 누르면 "지우기?" */
+.memo-rec .rec-item { position: relative; padding-right: 54px; }
+.memo-rec .rec-item > :last-child:not(button) { margin-bottom: 4px; }
+.memo-rec .rec-item ul { margin-bottom: 2px; }
+.rec-del { position: absolute; right: 0; top: 0; font: inherit; font-size: 11px; color: var(--muted); background: transparent;
+  border: 1px solid transparent; border-radius: 5px; padding: 0 6px; cursor: default; opacity: 0; }
+.rec-item:hover .rec-del, .rec-del.ask { opacity: 1; }
+.rec-del:hover { color: var(--text); border-color: var(--line); }
+.rec-del.ask { color: #fff; background: #E5484D; border-color: #E5484D; }

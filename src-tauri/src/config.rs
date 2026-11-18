@@ -40,7 +40,7 @@ pub struct Config {
 }
 
 // 고정 기능의 단축키 기본값
-pub const HOTKEY_ACTIONS: &[(&str, &str)] = &[("baro", "Alt+Space"), ("ai", ""), ("store", ""), ("graph", ""), ("files", "")];
+pub const HOTKEY_ACTIONS: &[(&str, &str)] = &[("baro", "Alt+Space"), ("ai", ""), ("store", ""), ("graph", ""), ("files", ""), ("memo", "")];
 
 fn ql(k: &str, n: &str, u: &str) -> Quicklink { Quicklink { keyword: k.into(), name: n.into(), url: u.into() } }
 fn sn(k: &str, n: &str, t: &str) -> Snippet { Snippet { keyword: k.into(), name: n.into(), text: t.into() } }

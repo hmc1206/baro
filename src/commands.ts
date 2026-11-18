@@ -20,7 +20,7 @@ export type StoreEntry = { id: string; name: string; description: string; versio
 // 목록 밖의 화면: 텍스트 결과, 권한 안내
 export type View = { kind: "text"; title: string; text: string; error?: boolean } | { kind: "perm"; perm: string };
 // 화면(App)이 넘겨주는 동작들
-export type Ui = { ask: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
+export type Ui = { ask: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
 
 const isMac = navigator.userAgent.includes("Mac");
 let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, note_searches: [], error: null };
@@ -88,6 +88,7 @@ const COMMANDS: Cmd[] = [
   { id: "b-notes", title: "노트 검색 관리", keys: "note search obsidian 옵시디언 노트 검색 만들기 추가 관리", glyph: "folder", run: async ui => ui.openNoteManager() },
   { id: "b-pin", title: "창 고정·해제", keys: "pin float always on top 고정 항상 위", glyph: "pin", run: async ui => ui.togglePin() },
   { id: "b-files", title: "파일 찾기 (Finder)", keys: "files finder find 파일 찾기 위치 폴더", glyph: "file", run: async ui => ui.openFiles() },
+  { id: "b-memo", title: "빠른 메모", keys: "memo note 메모 기록 적기 daily 데일리 공부 기록", glyph: "memo", run: async ui => ui.openMemo() },
   { id: "b-graph", title: "노트 그래프", keys: "graph vault 그래프 전체 노트 연결 링크 obsidian 옵시디언", glyph: "graph", run: async ui => ui.openGraph() },
   { id: "b-center", title: "Baro 창 위치 초기화", keys: "center reset window position 가운데 위치 초기화 창", glyph: "center", run: () => invoke("set_placed", { on: false }) },
   { id: "b-hotkeys", title: "단축키 설정", keys: "hotkey shortcut keyboard 단축키", glyph: "keyboard", run: async ui => ui.openHotkeys() },
@@ -194,6 +195,7 @@ export function homeItems(ui: Ui): Item[] {
   return [
     ex("apps", "app", "app", "앱 실행", "앱 이름 입력 · 예: 사파리", "사파리"),
     go("files", "file", "cmd", "파일 찾기", "홈 · 외장 디스크에서 이름으로 찾고 Finder로 위치 보기", "열기", async () => ui.openFiles(), true),
+    go("memo", "memo", "cmd", "빠른 메모", "오늘 Daily나 공부 중인 단계의 내 기록에 한 줄 적기", "열기", async () => ui.openMemo(), true),
     ex("calc", "calc", "calc", "계산기", "수식 입력 · 예: 12*3+4", "12*3+4"),
     ex("ai", "ai", "ai", "AI에게 묻기", config.ai_ready ? `질문 입력 후 Tab · ${config.ai_model}` : "설정에서 AI 연결 필요", "맥북 생산성 단축키 3개 추천해줘"),
     ex("window", "left", "cmd", "창 관리", "창 · 왼쪽/오른쪽 절반, 최대화", "창"),

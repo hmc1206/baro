@@ -46,7 +46,7 @@ const PERMS: Record<string, { title: string; body: string }> = {
 
 // 단축키를 지정할 수 있는 기능: 고정 기능(Rust config.rs의 HOTKEY_ACTIONS) + 사용자가 만든 노트 검색
 const hotkeyLabels = (): [string, string][] => [
-  ["baro", "Baro 열기"], ["ai", "AI에게 묻기"], ["store", "확장 스토어"], ["graph", "노트 그래프 (전체)"], ["files", "파일 찾기 (Finder)"],
+  ["baro", "Baro 열기"], ["ai", "AI에게 묻기"], ["store", "확장 스토어"], ["graph", "노트 그래프 (전체)"], ["files", "파일 찾기 (Finder)"], ["memo", "빠른 메모"],
   ...getConfig().note_searches.map(n => [`note:${n.id}`, n.name] as [string, string]),
   // 검색어 없는 퀵링크 (예: 아이디어 캔버스 열기). 누르면 Baro 창 없이 바로 열림
   ...getConfig().quicklinks.filter(l => !l.url.includes("{query}")).map(l => [`link:${l.keyword}`, l.name] as [string, string]),
@@ -117,13 +117,49 @@ function newPwNote(last: Doc | undefined, name: string, title: string, password:
   return `${lines.join("\n")}\n\n# ${title || name}\n\n## 풀이\n- \n\n## 배운 점\n- \n\n## 관련\n${links}\n`;
 }
 // 화면 종류: null(기본 검색) | 파일 찾기 | 확장 스토어 | 노트 검색 | 예시 고르기 | 단축키 설정 | AI 질문 | 노트 검색 관리 | 노트 검색 추가·수정
-type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit" | "files";
+type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit" | "files" | "memo";
+// 빠른 메모: 기록할 커리큘럼 단계(없으면 Daily만), 어디서 왔는지(Esc로 돌아갈 곳), 결과 문구
+type Stage = { search: NoteSearch; doc: Doc };
+type Memo = { stage: Stage | null; from: Mode; saved: string | null; error: string | null; finding?: boolean; daily?: string; dailyDate?: string };
+// 지운 기록 (⌘Z로 되돌리기): sec는 "daily" 또는 칸 이름
+type Removed = { sec: string; id: string; file: string; date: string; line: number; text: string };
+const RECORD = { learn: "배운 점", stuck: "막힌 점과 해결", cmd: "사용한 명령어" } as const;
+const pad = (n: number) => String(n).padStart(2, "0");
+const now = () => { const d = new Date(); return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` }; };
+// 명령어 기록: 한 줄이면 "- `cmd`", 여러 줄이거나 `가 있으면 코드 블록
+const cmdBlock = (s: string) => !s.includes("\n") && !s.includes("`") ? `- \`${s}\`` : "```bash\n" + s + "\n```";
+// 여러 줄 메모 → 목록 한 항목 (둘째 줄부터 들여쓰기)
+const listBlock = (s: string) => "- " + s.split("\n").map(l => l.trimEnd()).join("\n  ");
+// 기록 항목: "- " 줄 + 들여쓴 이어지는 줄, 또는 ``` 코드 블록 하나 (Rust wiki::items_in과 같은 규칙 — 지울 때 번호가 맞아야 함)
+type RecItem = { i: number; first: string; text: string };
+function itemsOf(lines: string[]): RecItem[] {
+  const out: RecItem[] = [];
+  for (let i = 0; i < lines.length;) {
+    let j = i + 1;
+    if (lines[i].startsWith("```")) { while (j < lines.length && !lines[j].startsWith("```")) j++; j = Math.min(j + 1, lines.length); }
+    else if (lines[i].startsWith("- ")) { while (j < lines.length && lines[j].trim() && /^[ \t]/.test(lines[j])) j++; }
+    else { i++; continue; }
+    out.push({ i: out.length, first: lines[i], text: lines.slice(i, j).join("\n") });
+    i = j;
+  }
+  return out;
+}
+const sectionRaw = (body: string, name: string) => {
+  const lines = body.split("\n"), h = lines.findIndex(l => l.trimEnd() === `### ${name}`);
+  if (h < 0) return [];
+  const end = lines.findIndex((l, i) => i > h && l.startsWith("#"));
+  return lines.slice(h + 1, end < 0 ? undefined : end);
+};
+const dailyRaw = (text: string) => { const m = text.match(/^---\n[\s\S]*?\n---\n/); return (m ? text.slice(m[0].length) : text).split("\n"); };
 
 export default function App() {
   const [q, setQ] = useState("");
   const [top, setTop] = useState<Item[]>([]);
   const [bottom, setBottom] = useState<Item[]>([]);
   const [files, setFiles] = useState<Item[]>([]);
+  const [memo, setMemo] = useState<Memo>({ stage: null, from: null, saved: null, error: null });
+  const [delPending, setDelPending] = useState<string | null>(null); // 한 번 누른 × ("칸:번호")
+  const [removed, setRemoved] = useState<Removed | null>(null);
   const [found, setFound] = useState<{ items: Item[]; loading: boolean }>({ items: [], loading: false }); // 파일 찾기 화면 결과
   const [sel, setSel] = useState(0);
   const [menu, setMenu] = useState(false); // ⌘K 액션 패널
@@ -146,7 +182,8 @@ export default function App() {
   const [local, setLocal] = useState(0); // 로컬 그래프: 0 끔, 1·2 = 고른 노트에서 몇 단계까지 (⌘L)
   const [hk, setHk] = useState<Hk>({ keys: {}, recording: null, error: null });
   const aiSeq = useRef(0);
-  const input = useRef<HTMLInputElement>(null);
+  const input = useRef<HTMLInputElement & HTMLTextAreaElement>(null); // 메모 화면에서는 여러 줄 입력칸(textarea)
+  const recRef = useRef<HTMLElement>(null);
   const list = useRef<HTMLUListElement>(null);
   const seq = useRef(0);
   const [rev, setRev] = useState(0);
@@ -223,6 +260,102 @@ export default function App() {
       .then(reloadDocs).catch(failNote("체크하지 못했어요"));
   };
   const openFiles = () => { setFound({ items: [], loading: false }); enter("files"); };
+  // 빠른 메모 열기. stage가 없으면 커리큘럼에서 "진행 중"(없으면 아직 안 끝난 첫) 단계를 찾음 (목차 노트 제외)
+  const openMemo = (stage?: Stage, from: Mode = null) => {
+    setMemo({ stage: stage ?? null, from, saved: null, error: null, finding: !stage });
+    setDelPending(null); setRemoved(null);
+    enter("memo");
+    loadDaily();
+    if (stage) return;
+    (async () => {
+      for (const s of getConfig().note_searches.filter(n => n.kind === "curriculum")) {
+        let docs = docCache.get(s.id)?.docs;
+        if (!docs) { docs = await loadDocs(s).catch(() => [] as Doc[]); docCache.set(s.id, { docs, sig: docsSig(docs) }); }
+        const stages = docs.filter(d => !d.aliases.includes("moc")).sort((a, b) => a.file.localeCompare(b.file, undefined, { numeric: true }));
+        const doc = stages.find(d => STATUS[d.meta.status] === "진행 중") ?? stages.find(d => d.meta.status !== "done");
+        if (doc) { setMemo(m => ({ ...m, stage: { search: s, doc }, finding: false })); return; }
+      }
+      setMemo(m => ({ ...m, finding: false }));
+    })();
+  };
+  const loadDaily = () => { const date = now().date; return invoke<string>("memo_daily_read", { date }).then(daily => setMemo(m => ({ ...m, daily, dailyDate: date }))).catch(() => {}); };
+  // 단계 노트를 다시 읽어 오른쪽 기록을 새로 (커리큘럼 화면도)
+  const refreshStage = (st: Stage) => {
+    docCache.delete(st.search.id);
+    if (notes.search?.id === st.search.id) reloadDocs();
+    loadDocs(st.search).then(docs => {
+      const doc = docs.find(d => d.file === st.doc.file);
+      if (doc) setMemo(m => m.stage?.doc.file === doc.file ? { ...m, stage: { ...m.stage, doc } } : m);
+    }).catch(() => {});
+  };
+  // 기록 지우기 (×를 두 번). 지운 내용은 ⌘Z로 되돌릴 수 있게 보관
+  const removeRecord = async (sec: string, i: number) => {
+    setDelPending(null);
+    const st = memo.stage, daily = sec === "daily";
+    const list = daily ? itemsOf(dailyRaw(memo.daily ?? "")) : itemsOf(sectionRaw(st?.doc.body ?? "", sec));
+    const item = list[i];
+    if (!item || (!daily && !st)) return;
+    const args = { id: st?.search.id ?? "", file: st?.doc.file ?? "", date: memo.dailyDate ?? now().date, section: sec };
+    await invoke<{ line: number; text: string }>("memo_remove", { ...args, index: i, first: item.first })
+      .then(r => {
+        setRemoved({ sec, id: args.id, file: args.file, date: args.date, line: r.line, text: r.text });
+        setMemo(m => ({ ...m, saved: "지웠어요 · ⌘Z로 되돌리기", error: null }));
+        if (daily) loadDaily(); else refreshStage(st!);
+      }).catch(memoFail);
+  };
+  const undoRemove = async () => {
+    const r = removed;
+    if (!r) return;
+    await invoke("memo_restore", { id: r.id, file: r.file, date: r.date, section: r.sec, line: r.line, text: r.text })
+      .then(() => {
+        setRemoved(null);
+        setMemo(m => ({ ...m, saved: "되돌렸어요", error: null }));
+        if (r.sec === "daily") loadDaily(); else if (memo.stage) refreshStage(memo.stage);
+      }).catch(memoFail);
+  };
+  const onRecClick = (e: MouseEvent<HTMLElement>) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>(".rec-del");
+    if (!b) { setDelPending(null); return; }
+    const key = `${b.dataset.sec}:${b.dataset.i}`;
+    if (delPending === key) removeRecord(b.dataset.sec!, Number(b.dataset.i));
+    else setDelPending(key);
+  };
+  const memoDone = (saved: string) => { setMemo(m => ({ ...m, saved, error: null })); setQ(""); };
+  const memoFail = (e: unknown) => setMemo(m => ({ ...m, saved: null, error: String(e) }));
+  const saveDaily = async (text: string) => {
+    if (!text) return;
+    const { date, time } = now();
+    await invoke("memo_daily", { date, time, text }).then(() => { memoDone(`오늘 Daily에 적었어요 · ${time}`); loadDaily(); }).catch(memoFail);
+  };
+  const saveRecord = async (section: string, block: string) => {
+    const st = memo.stage;
+    if (!st || !block.trim()) return;
+    await invoke("note_add_record", { id: st.search.id, file: st.doc.file, section, block })
+      .then(() => {
+        memoDone(`${st.doc.name.split(":")[0]} · ${section}에 기록했어요`);
+        refreshStage(st); // 오른쪽 기록과 커리큘럼 화면을 새 내용으로
+      }).catch(memoFail);
+  };
+  const saveClipboard = async () => {
+    const clip = (await invoke<string>("clipboard_text").catch(() => "")).trim();
+    if (!clip) return memoFail("클립보드가 비어 있어요.");
+    await saveRecord(RECORD.cmd, cmdBlock(clip));
+  };
+  // 메모 화면 목록: 저장할 곳 (순서 고정). "!"·"$"로 시작하면 막힌 점·명령어로 선택이 옮겨 가고 그 글자는 빼고 저장
+  const memoItems = (): Item[] => {
+    const raw = q.trim(), pre = raw[0] === "!" || raw[0] === "$";
+    const text = pre ? raw.slice(1).trim() : raw;
+    const st = memo.stage, short = st?.doc.name.split(":")[0] ?? "";
+    const rec = (section: string, glyph: string): Item => ({ id: `memo-${section}`, title: `${short} · ${section}`, subtitle: st!.doc.name, kind: "wiki", glyph,
+      actions: [{ title: "기록", keep: true, run: async () => { if (text) await saveRecord(section, section === RECORD.cmd ? cmdBlock(text) : listBlock(text)); } }] });
+    const recs = st ? [rec(RECORD.learn, "learn"), rec(RECORD.stuck, "stuck"), rec(RECORD.cmd, "cmdlog")] : [];
+    const daily: Item = { id: "memo-daily", title: "오늘 Daily에 메모", subtitle: `03_Daily/${now().date}.md`, kind: "wiki", glyph: "daily",
+      actions: [{ title: "메모", keep: true, run: () => saveDaily(raw) }] };
+    // 클립보드 기록은 입력이 비어 있을 때만 (입력한 메모 대신 클립보드가 저장되는 실수 방지). 맨 끝이라 다른 칸 순서는 그대로
+    const clip: Item[] = st && !raw ? [{ id: "memo-clip", title: "클립보드를 명령어로 기록", subtitle: `${short} · ${RECORD.cmd}`, kind: "wiki", glyph: "clip",
+      actions: [{ title: "기록", keep: true, run: saveClipboard }] }] : [];
+    return [...recs, daily, ...clip];
+  };
   // 비밀번호 수정·새 노트 저장 후 노트 다시 읽기
   const savePw = async () => {
     const search = notes.search;
@@ -274,7 +407,7 @@ export default function App() {
   };
   const openExamples = (doc: Doc) => { setExDoc({ doc, prevQ: q }); setQ(""); setMode("examples"); };
   const ui: Ui = {
-    ask, openStore, openNotes, openGraph, openFiles, openNoteManager, openHotkeys, togglePin,
+    ask, openStore, openNotes, openGraph, openFiles, openMemo: () => openMemo(), openNoteManager, openHotkeys, togglePin,
     show: v => { setAi(null); setView(v); },
     setQuery: text => { setQ(text); input.current?.focus(); },
   };
@@ -307,7 +440,8 @@ export default function App() {
       return { id: `n-${d.file}`, title: d.name, kind: "wiki",
         glyph: st === "done" ? "done" : STATUS[st] === "진행 중" ? "doing" : "todo",
         subtitle: [STATUS[st] ?? st, weekLabel(d.meta.week), tasks.length ? `${n}/${tasks.length}` : ""].filter(Boolean).join(" · "),
-        actions: [obsidian, { title: `상태를 "${STATUS[next]}"(으)로`, shortcut: "⌘D", keep: true, run: () => setStatus(d, next) },
+        actions: [obsidian, { title: "이 단계에 기록하기", shortcut: "⌘N", keep: true, run: async () => openMemo({ search: notes.search!, doc: d }, "note") },
+          { title: `상태를 "${STATUS[next]}"(으)로`, shortcut: "⌘D", keep: true, run: () => setStatus(d, next) },
           finder, { title: "이름 복사", run: () => copy(d.name) }] };
     }
     const pick = kind === "commands" ? "예시 골라서 쓰기" : "코드 골라서 쓰기";
@@ -382,12 +516,36 @@ export default function App() {
     : mode === "store" ? storeItems(q, store.entries, () => setRev(r => r + 1), ui)
     : mode === "ask" ? (q.trim() ? [aiItem(q.trim(), ask)] : [])
     : mode === "files" ? found.items
+    : mode === "memo" ? memoItems()
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
   const graphOn = mode === "note" && graph;
   const curDoc = mode === "note" ? (graphOn && pick ? pick : noteList[sel]) : undefined;
   const links = useMemo(() => graphOn ? linkInfo(notes.docs) : null, [graphOn, notes.docs]); // 미리보기: 가는·오는 링크
   const curLinks = curDoc && links?.get(curDoc.file);
   const graphMatches = useMemo(() => graphOn && q.trim() ? new Set(noteList.map(d => d.file)) : null, [graphOn, q, noteList]);
+  // 빠른 메모 오른쪽: 단계의 "내 기록" 세 칸과 오늘 Daily 메모 (칸마다 최근 6개)
+  const memoSel = mode === "memo" ? items[sel]?.id ?? "" : "";
+  const memoHtml = useMemo(() => {
+    if (mode !== "memo") return "";
+    const box = (on: boolean, title: string, sub: string, sec: string, items: RecItem[]) => {
+      const shown = items.slice(-6), n = items.length;
+      return `<section class="rec${on ? " on" : ""}"><h4>${title} <span>${n ? `${n}개${n > 6 ? " · 최근 6개" : ""}` : ""}</span></h4>`
+        + (shown.length ? shown.map(it => {
+          const ask = delPending === `${sec}:${it.i}`;
+          return `<div class="rec-item">${marked.parse(it.text, { async: false }) as string}`
+            + `<button class="rec-del${ask ? " ask" : ""}" data-sec="${sec}" data-i="${it.i}" title="지우기">${ask ? "지우기?" : "×"}</button></div>`;
+        }).join("") : `<p class="none">${sub}</p>`) + "</section>";
+    };
+    const st = memo.stage, body = st?.doc.body ?? "";
+    return [
+      ...(st ? [RECORD.learn, RECORD.stuck, RECORD.cmd].map(s => box(memoSel === `memo-${s}` || (memoSel === "memo-clip" && s === RECORD.cmd),
+        `${st.doc.name.split(":")[0]} · ${s}`, "아직 없음", s, itemsOf(sectionRaw(body, s)))) : []),
+      box(memoSel === "memo-daily", "오늘 Daily", "오늘 적은 메모가 없어요", "daily", itemsOf(dailyRaw(memo.daily ?? ""))),
+    ].join("");
+  }, [mode, memo.stage, memo.daily, memoSel, delPending]);
+  // 고른 칸이 보이게 스크롤
+  useEffect(() => { recRef.current?.querySelector(".rec.on")?.scrollIntoView({ block: "nearest" }); }, [memoHtml]);
+
   const previewHtml = useMemo(() => {
     if (!curDoc) return "";
     let md = curDoc.markdown;
@@ -419,6 +577,7 @@ export default function App() {
     else if (action === "ai") enter("ask");
     else if (action === "graph") openGraph();
     else if (action === "files") openFiles();
+    else if (action === "memo") openMemo();
     else if (mode !== null && mode !== "store" && mode !== "noteEdit") enter(null);
     input.current?.focus(); input.current?.select();
   };
@@ -456,7 +615,11 @@ export default function App() {
   // 기본 검색 결과: 최신 요청 결과만 반영
   useEffect(() => {
     const id = ++seq.current;
-    setSel(0); setMenu(false); setPending(null); setPick(null);
+    setMenu(false); setPending(null); setPick(null);
+    if (mode !== "memo") setSel(0);
+    else if (memo.stage && /^\s*!/.test(q)) setSel(1); // 막힌 점과 해결
+    else if (memo.stage && /^\s*\$/.test(q)) setSel(2); // 사용한 명령어
+    else if (q.trim()) setSel(s => s > 3 ? 0 : s); // 클립보드 칸에 있다가 입력을 시작하면 (그 칸이 사라지므로) 첫 칸으로
     if (mode !== null) return;
     query(q, ui).then(r => {
       if (id !== seq.current) return;
@@ -505,6 +668,7 @@ export default function App() {
   const back = () => {
     if (mode === "examples") { setMode("note"); setQ(exDoc?.prevQ ?? ""); }
     else if (graphOn) { setGraph(false); setPick(null); }
+    else if (mode === "memo" && memo.from) setMode(memo.from); // 커리큘럼에서 왔으면 그 화면으로
     else setMode(null);
   };
 
@@ -558,6 +722,13 @@ export default function App() {
         else if (view.kind === "text") navigator.clipboard.writeText(view.text);
       }
       return;
+    }
+    if (mode === "memo" && !view && !menu) {
+      if (e.metaKey && e.code === "KeyZ" && !q && removed) { e.preventDefault(); undoRemove(); return; }
+      if (e.key === "Escape" && delPending) { e.preventDefault(); setDelPending(null); return; }
+      if (e.key === "Enter" && e.shiftKey) return; // 줄바꿈
+      if (e.key === "Tab") { e.preventDefault(); const n = items.length || 1; setSel(s => (s + (e.shiftKey ? n - 1 : 1)) % n); return; }
+      if (q.includes("\n") && (e.key === "ArrowUp" || e.key === "ArrowDown")) return; // 여러 줄: 커서 이동
     }
     if (e.key === "Tab" && (mode === null || mode === "ask")) { e.preventDefault(); if (q.trim()) ask(q.trim()); return; }
     if (ai) {
@@ -624,16 +795,19 @@ export default function App() {
     : mode === "hotkeys" ? "단축키 설정"
     : mode === "ask" ? "AI에게 물어보기 (Enter)"
     : mode === "files" ? "파일 이름 (홈 · 외장 디스크)"
+    : mode === "memo" ? "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 · ! 막힌 점 · $ 명령어"
     : "앱, 파일, 명령, 계산, AI에게 묻기";
   const header = home ? "Baro로 할 수 있는 일"
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`
     : mode === "files" ? (found.loading ? "찾는 중…" : q.trim() ? `파일 ${found.items.length}개` : "파일 이름을 입력하세요 · Enter로 Finder에서 보기")
+    : mode === "memo" ? (memo.saved ? `✓ ${memo.saved}` : memo.finding ? "공부 중인 단계 찾는 중…" : memo.stage ? `지금 단계: ${memo.stage.doc.name}` : "공부 중인 커리큘럼 단계가 없어 Daily에 적어요")
     : mode === "note" && (notes.loading || q.trim()) ? (notes.loading ? "노트 불러오는 중…" : `검색 결과 ${noteList.length}개`)
     : null;
   const empty = mode === "store" ? store.error
     : mode === "note" ? notes.error ?? (!notes.loading && !items.length ? (q ? "일치하는 노트가 없어요." : "폴더에 노트(.md)가 없어요.") : null)
     : mode === "hotkeys" ? hk.error
     : mode === "files" ? (q.trim() && !found.loading && !found.items.length ? "일치하는 파일이 없어요." : null)
+    : mode === "memo" ? memo.error
     : mode === null && q && !items.length ? "결과가 없습니다. 다른 이름으로 검색해 보세요." : null;
 
   const listEl = (
@@ -658,7 +832,9 @@ export default function App() {
       {/* 위쪽 끌기 막대: 잡고 끌면 창이 움직이고, 옮긴 자리는 다음에 열 때도 유지 */}
       <div className="grip" data-tauri-drag-region title="끌어서 창 이동 · 가운데로 되돌리기: '창 위치 초기화'"
         onMouseDown={() => invoke("set_placed", { on: true })}><span data-tauri-drag-region /></div>
-      {mode !== "noteEdit" && mode !== "pwEdit" && <input ref={input} className="search" value={q} autoFocus spellCheck={false} placeholder={placeholder}
+      {mode === "memo" ? <textarea ref={input} className="search memo-input" value={q} autoFocus spellCheck={false} placeholder={placeholder}
+        rows={Math.min(6, q.split("\n").length)} onChange={e => setQ(e.target.value)} />
+        : mode !== "noteEdit" && mode !== "pwEdit" && <input ref={input} className="search" value={q} autoFocus spellCheck={false} placeholder={placeholder}
         onChange={e => setQ(e.target.value)} />}
       {view ? (
         <section className="ai-view">
@@ -760,6 +936,12 @@ export default function App() {
               </div>
             )}
           </div>
+        </div>
+      ) : mode === "memo" ? (
+        // 빠른 메모: 왼쪽 저장할 곳 + 오른쪽 이미 적은 기록 (고른 칸 강조)
+        <div className="split">
+          {listEl}
+          <article ref={recRef} className="preview md memo-rec" onClick={onRecClick} dangerouslySetInnerHTML={{ __html: memoHtml }} />
         </div>
       ) : mode === "note" ? (
         // 노트 검색: 왼쪽 목록 + 오른쪽 노트 미리보기
