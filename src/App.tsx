@@ -204,6 +204,8 @@ export default function App() {
   const aiSeq = useRef(0);
   const input = useRef<HTMLInputElement & HTMLTextAreaElement>(null); // 메모 화면에서는 여러 줄 입력칸(textarea)
   const recRef = useRef<HTMLElement>(null);
+  const shotList = useRef(""); // 방금 사진 링크를 넣은 첨부 목록 노트 (저장 안내에 표시)
+  const memoDest = useRef(0); // 빠른 메모: 마지막으로 고른 저장할 곳 (사진 넣은 뒤 그 칸으로 돌아가기)
   const list = useRef<HTMLUListElement>(null);
   const seq = useRef(0);
   const [rev, setRev] = useState(0);
@@ -387,8 +389,12 @@ export default function App() {
     if (delPending === key) removeRecord(b.dataset.sec!, Number(b.dataset.i));
     else setDelPending(key);
   };
-  const memoDone = (saved: string) => { setMemo(m => ({ ...m, saved, error: null })); setQ(""); };
-  const memoFail = (e: unknown) => setMemo(m => ({ ...m, saved: null, error: String(e) }));
+  const memoDone = (saved: string) => {
+    const list = shotList.current;
+    shotList.current = "";
+    setMemo(m => ({ ...m, saved: list ? `${saved} · 사진은 ${list}에도 추가` : saved, error: null })); setQ("");
+  };
+  const memoFail = (e: unknown) => { shotList.current = ""; setMemo(m => ({ ...m, saved: null, error: String(e) })); };
   const saveDaily = async (text: string) => {
     if (!text) return;
     const { date, time } = now();
@@ -415,36 +421,47 @@ export default function App() {
     const s = memo.shot;
     if (!s) return "";
     try {
-      const f = await invoke<string>("shot_save", { source: s.source, path: s.path, name: shotName(text), date: now().date, id, file });
+      const [f, list] = await invoke<[string, string]>("shot_save", { source: s.source, path: s.path, name: shotName(text), date: now().date, id, file });
       setMemo(m => ({ ...m, shot: null }));
+      shotList.current = list;
       return `![[${f}]]`;
     } catch (e) { memoFail(e); return null; }
   };
-  const toggleShot = () => memo.shot ? setMemo(m => ({ ...m, shot: null }))
+  const toggleShot = async () => memo.shot ? setMemo(m => ({ ...m, shot: null }))
     : invoke<Shot>("shot_latest").then(shot => setMemo(m => ({ ...m, shot, saved: null, error: null }))).catch(memoFail);
   // 메모 화면 목록: 저장할 곳 (순서 고정). "!"·"$"로 시작하면 막힌 점·명령어로 선택이 옮겨 가고 그 글자는 빼고 저장
   const memoItems = (): Item[] => {
     const raw = q.trim(), pre = raw[0] === "!" || raw[0] === "$";
     const text = pre ? raw.slice(1).trim() : raw;
     const st = memo.stage, short = st?.doc.name.split(":")[0] ?? "";
+    // ⌘O: 메모를 적을 노트를 Obsidian에서 열기
+    const openNote = (file: string) => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(file)}` });
+    const openStage: Action = { title: "이 노트 열기 (Obsidian)", shortcut: "⌘O", run: async () => { if (st) await openNote(st.doc.file); } };
+    const openDaily: Action = { title: "오늘 Daily 열기 (Obsidian)", shortcut: "⌘O",
+      run: () => invoke<string>("memo_daily_path", { date: now().date }).then(openNote) };
     const rec = (section: string, glyph: string): Item => ({ id: `memo-${section}`, title: `${short} · ${section}`, subtitle: st!.doc.name, kind: "wiki", glyph,
       actions: [{ title: "기록", keep: true, run: async () => {
         if (!text && !memo.shot) return;
         const emb = await attachShot(text, st!.search.id, st!.doc.file);
         if (emb === null) return;
         await saveRecord(section, section === RECORD.cmd ? [text && cmdBlock(text), emb].filter(Boolean).join("\n") : listBlock([text, emb].filter(Boolean).join("\n")));
-      } }] });
+      } }, openStage] });
     const recs = st ? [rec(RECORD.learn, "learn"), rec(RECORD.stuck, "stuck"), rec(RECORD.cmd, "cmdlog")] : [];
     const daily: Item = { id: "memo-daily", title: "오늘 Daily에 메모", subtitle: `03_Daily/${now().date}.md`, kind: "wiki", glyph: "daily",
       actions: [{ title: "메모", keep: true, run: async () => {
         if (!raw && !memo.shot) return;
         const emb = await attachShot(raw, "", "");
         if (emb !== null) await saveDaily([raw, emb].filter(Boolean).join("\n"));
-      } }] };
+      } }, openDaily] };
     // 클립보드 기록은 입력이 비어 있을 때만 (입력한 메모 대신 클립보드가 저장되는 실수 방지). 맨 끝이라 다른 칸 순서는 그대로
     const clip: Item[] = st && !raw ? [{ id: "memo-clip", title: "클립보드를 명령어로 기록", subtitle: `${short} · ${RECORD.cmd}`, kind: "wiki", glyph: "clip",
       actions: [{ title: "기록", keep: true, run: saveClipboard }] }] : [];
-    return [...recs, daily, ...clip];
+    // 사진 같이 넣기: 복사한 스크린샷을 메모에 붙이고, 고르던 저장할 곳으로 선택을 되돌림 (입력한 글은 그대로)
+    const photo: Item = { id: "memo-shot", kind: "wiki", glyph: memo.shot ? "imageOff" : "image",
+      title: memo.shot ? "사진 빼기" : "사진 같이 넣기",
+      subtitle: memo.shot ? "붙인 사진을 메모에서 빼요 · ⌘I" : "복사한 스크린샷(⌘⌃⇧4)을 메모에 붙여요 · ⌘I",
+      actions: [{ title: memo.shot ? "빼기" : "넣기", keep: true, run: async () => { await toggleShot(); setSel(memoDest.current); } }] };
+    return [...recs, daily, photo, ...clip];
   };
   // 비밀번호 수정·새 노트 저장 후 노트 다시 읽기
   const savePw = async () => {
@@ -622,6 +639,7 @@ export default function App() {
   const graphMatches = useMemo(() => graphOn && q.trim() ? new Set(noteList.map(d => d.file)) : null, [graphOn, q, noteList]);
   // 빠른 메모 오른쪽: 단계의 "내 기록" 세 칸과 오늘 Daily 메모 (칸마다 최근 6개)
   const memoSel = mode === "memo" ? items[sel]?.id ?? "" : "";
+  useEffect(() => { if (mode === "memo" && memoSel && memoSel !== "memo-shot") memoDest.current = sel; }, [mode, memoSel, sel]);
   const memoHtml = useMemo(() => {
     if (mode !== "memo") return "";
     const box = (on: boolean, title: string, sub: string, sec: string, items: RecItem[]) => {
@@ -908,7 +926,7 @@ export default function App() {
     : mode === "ask" ? "AI에게 물어보기 (Enter · ⌘↵ 내 노트에서 찾아 묻기)"
     : mode === "files" ? "파일 이름 (홈 · 외장 디스크)"
     : mode === "clip" ? "복사했던 글 검색"
-    : mode === "memo" ? (memo.shot ? "스크린샷 이름 겸 메모 · Enter 저장 · ⌘I 빼기" : "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 · ! 막힌 점 · $ 명령어 · ⌘I 스크린샷")
+    : mode === "memo" ? (memo.shot ? "스크린샷 이름 겸 메모 · Enter 저장 · ⌘I 빼기" : "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 · ! 막힌 점 · $ 명령어 · ⌘O 노트 열기")
     : "앱, 파일, 명령, 계산, AI에게 묻기";
   const header = home ? "Baro로 할 수 있는 일"
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`

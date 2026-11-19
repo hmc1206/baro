@@ -527,19 +527,38 @@ fn memo_restore(id: String, file: String, date: String, section: String, line: u
 
 // 빠른 메모 스크린샷: 방금 찍은 것 (클립보드 이미지 또는 스크린샷 파일, 30분 이내)
 #[tauri::command]
-async fn shot_latest() -> Result<shot::Shot, String> {
-    tauri::async_runtime::spawn_blocking(shot::latest).await.map_err(|e| e.to_string())?
+async fn shot_latest(app: AppHandle) -> Result<shot::Shot, String> {
+    // 처음 데스크탑을 읽을 때 macOS 폴더 접근 확인 창이 뜨면 Baro가 초점을 잃음 → 그동안은 숨기지 않음
+    let st = app.state::<AppState>();
+    *st.dialog_open.lock().unwrap() = true;
+    let r = tauri::async_runtime::spawn_blocking(shot::latest).await.map_err(|e| e.to_string());
+    *st.dialog_open.lock().unwrap() = false;
+    r?
 }
 
-// 스크린샷을 메모할 노트 옆 attachments/에 "날짜-이름"으로 저장. id가 비면 오늘 Daily(03_Daily/attachments). 돌려주는 값: 파일 이름
+// 스크린샷을 메모할 노트 옆 attachments/에 "날짜-이름"으로 저장하고, 그 폴더의 첨부 목록 노트에 링크 추가.
+// id가 비면 오늘 Daily(03_Daily). 돌려주는 값: 파일 이름, 첨부 목록 노트 이름(추가 실패면 빈 글자)
 #[tauri::command]
-async fn shot_save(source: String, path: Option<String>, name: String, date: String, id: String, file: String, app: AppHandle) -> Result<String, String> {
-    let dir = if id.is_empty() {
-        PathBuf::from(config::load(&config_file(&app))?.vault_dir).join("03_Daily").join("attachments")
-    } else {
-        wiki::inside(&note_dir(&app, &id)?, &file)?.parent().ok_or("노트 폴더를 찾지 못했어요.")?.join("attachments")
+async fn shot_save(source: String, path: Option<String>, name: String, date: String, id: String, file: String, app: AppHandle) -> Result<(String, String), String> {
+    let vault = PathBuf::from(config::load(&config_file(&app))?.vault_dir);
+    let note_dir = if id.is_empty() { vault.join("03_Daily") } else {
+        wiki::inside(&note_dir(&app, &id)?, &file)?.parent().ok_or("노트 폴더를 찾지 못했어요.")?.to_path_buf()
     };
-    tauri::async_runtime::spawn_blocking(move || shot::save(&source, path.as_deref(), &name, &date, &dir)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let f = shot::save(&source, path.as_deref(), &name, &date, &note_dir.join("attachments"))?;
+        let list = shot::add_to_list(&vault, &note_dir, &note_dir.join("attachments").join(&f))
+            .unwrap_or_else(|e| { eprintln!("첨부 목록 추가 실패: {e}"); String::new() });
+        Ok((f, list))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// 빠른 메모: 오늘 Daily 노트 경로 (Obsidian에서 열기용). 아직 없으면 Err
+#[tauri::command]
+fn memo_daily_path(date: String, app: AppHandle) -> Result<String, String> {
+    if date.len() != 10 || !date.chars().all(|c| c.is_ascii_digit() || c == '-') { return Err("날짜 형식이 잘못됐어요.".into()); }
+    let f = PathBuf::from(config::load(&config_file(&app))?.vault_dir).join("03_Daily").join(format!("{date}.md"));
+    if !f.is_file() { return Err("오늘 Daily 노트가 아직 없어요. 메모를 하나 저장하면 만들어져요.".into()); }
+    Ok(f.to_string_lossy().into_owned())
 }
 
 // 빠른 메모: 오늘 Daily 노트 읽기 (이미 적은 메모 보기)
@@ -729,7 +748,7 @@ fn main() {
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, notes_embed_build, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, note_set_field, note_toggle_task, note_add_record, memo_daily, memo_daily_read, shot_latest, shot_save, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
+            notes_load, note_set_field, note_toggle_task, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
         .run(tauri::generate_context!())
         .expect("Baro 실행 실패");

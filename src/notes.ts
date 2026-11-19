@@ -133,7 +133,9 @@ function firstLine(body: string) {
 export async function loadDocs(search: NoteSearch): Promise<Doc[]> {
   const w = await invoke<{ notes: Note[]; chapters: Note[] }>("notes_load", { id: search.id });
   const chapters = new Map([...w.chapters, ...w.notes].map(c => [baseName(c.file), c.text]));
-  return w.notes.map(n => {
+  // 커리큘럼: 첨부 목록 같은 목록 노트(type: index)는 단계가 아님
+  const notes = search.kind === "curriculum" ? w.notes.filter(n => frontmatter(n.text).data.type !== "index") : w.notes;
+  return notes.map(n => {
     const { data, body } = frontmatter(n.text);
     const text = body.trim();
     const heading = text.match(/^# (.+)$/m)?.[1]?.trim();

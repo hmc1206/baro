@@ -1,5 +1,5 @@
 // 빠른 메모 스크린샷: 방금 찍은 스크린샷을 Vault에 이름을 붙여 저장
-// - 가져올 곳: 클립보드 이미지(⌘⌃⇧4) 또는 스크린샷 폴더의 파일(⌘⇧4, 기본 데스크탑) 중 더 최근 것. 30분 이내만
+// - 가져올 곳: 복사한 이미지(⌘⌃⇧4)가 있으면 그것, 없으면 스크린샷 폴더의 30분 안 파일(⌘⇧4, 기본 데스크탑)
 // - 저장할 곳: 메모를 적는 노트 옆 attachments/ 폴더, 이름은 "날짜-이름.확장자" (같은 이름이 있으면 -2, -3…)
 // - 파일에서 가져왔으면 원본은 휴지통으로 (Finder에서 "되돌려 놓기" 가능)
 use base64::Engine;
@@ -63,19 +63,18 @@ fn data_url(bytes: &[u8], ext: &str) -> String {
 pub fn latest() -> Result<Shot, String> {
     let now = now_ms();
     let clip_at = crate::clip::IMAGE_AT.load(std::sync::atomic::Ordering::Relaxed);
-    let file = latest_file(&shot_dir()).filter(|(_, t)| now - t <= RECENT_MS);
-    let clip_ok = clip_at > 0 && now - clip_at <= RECENT_MS;
-    if clip_ok && file.as_ref().is_none_or(|(_, t)| clip_at >= *t) {
+    // 복사한 이미지가 먼저 (이때는 데스크탑을 읽지 않음 → 폴더 접근 확인 창도 안 뜸). 시각 0 = Baro가 켜지기 전에 복사돼 시각을 모름 → 그래도 사용
+    if clip_at == 0 || now - clip_at <= RECENT_MS {
         if let Some(png) = clip_png() {
             return Ok(Shot { source: "clip".into(), path: None, at: clip_at, preview: data_url(&png, "png") });
         }
     }
-    if let Some((p, t)) = file {
+    if let Some((p, t)) = latest_file(&shot_dir()).filter(|(_, t)| now - t <= RECENT_MS) {
         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("png").to_lowercase();
         let b = std::fs::read(&p).map_err(|e| format!("스크린샷을 읽지 못했어요: {e}"))?;
         return Ok(Shot { source: "file".into(), path: Some(p.to_string_lossy().into_owned()), at: t, preview: data_url(&b, &ext) });
     }
-    Err("30분 안에 찍은 스크린샷이 없어요. ⌘⇧4(파일) 또는 ⌘⌃⇧4(클립보드)로 찍어 주세요.".into())
+    Err("복사한 스크린샷이 없어요. ⌘⌃⇧4로 찍으면 클립보드에 복사돼요. (⌘⇧4로 찍은 파일은 30분 안의 것만)".into())
 }
 
 // 파일 이름으로 쓸 수 있게: 금지 글자 빼고, 공백은 -, 최대 50글자
@@ -125,6 +124,59 @@ pub fn save(source: &str, path: Option<&str>, name: &str, date: &str, dir: &Path
     Ok(out.file_name().unwrap().to_string_lossy().into_owned())
 }
 
+// 첨부 목록 노트: 노트 폴더의 "…-첨부목록.md"(없으면 "<폴더>-첨부목록.md"를 새로 만듦)에
+// "### 빠른 메모 스크린샷" 아래로 "- [[Vault 기준 경로|파일 이름]]" 한 줄 추가, 제목의 "(N개)"도 하나 늘림. 돌려주는 값: 목록 노트 이름
+const LIST_HEAD: &str = "### 빠른 메모 스크린샷";
+
+fn list_note(dir: &Path) -> PathBuf {
+    use unicode_normalization::UnicodeNormalization;
+    let folder: String = dir.file_name().map(|n| n.to_string_lossy().nfc().collect()).unwrap_or_default();
+    let topic = folder.trim_start_matches(|c: char| c.is_ascii_digit() || c == '_').to_string();
+    let topic = if topic.is_empty() { folder } else { topic };
+    let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(dir).into_iter().flatten().filter_map(Result::ok)
+        .map(|e| (e.file_name().to_string_lossy().nfc().collect::<String>(), e.path()))
+        .filter(|(n, _)| n.ends_with("-첨부목록.md")).collect();
+    found.sort_by_key(|(n, _)| (!n.starts_with(&topic), n.clone())); // 폴더 이름으로 시작하는 것 먼저
+    found.into_iter().next().map(|(_, p)| p).unwrap_or_else(|| dir.join(format!("{topic}-첨부목록.md")))
+}
+
+pub fn add_to_list(vault: &Path, note_dir: &Path, saved: &Path) -> Result<String, String> {
+    use unicode_normalization::UnicodeNormalization;
+    let f = list_note(note_dir);
+    let stem = f.file_stem().map(|s| s.to_string_lossy().nfc().collect::<String>()).unwrap_or_default();
+    let topic = stem.trim_end_matches("-첨부목록").to_string();
+    let rel: String = saved.strip_prefix(vault).unwrap_or(saved).to_string_lossy().nfc().collect();
+    let name = saved.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let line = format!("- [[{rel}|{name}]]");
+    let date = name.get(..10).unwrap_or("");
+    let text = std::fs::read_to_string(&f).unwrap_or_else(|_| format!(
+        "---\ncreated: {date}\ntype: index\ntags: [attachments]\nsource: baro\n---\n\n# {topic} 첨부 목록 (0개)\n\n"));
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    // 제목의 개수
+    if let Some(h) = lines.iter_mut().find(|l| l.starts_with("# ") && l.ends_with("개)")) {
+        if let Some(i) = h.rfind(" (") {
+            if let Ok(n) = h[i + 2..h.len() - "개)".len()].parse::<usize>() { *h = format!("{} ({}개)", &h[..i], n + 1); }
+        }
+    }
+    match lines.iter().position(|l| l.trim_end() == LIST_HEAD) {
+        Some(h) => {
+            // 그 칸의 마지막 줄 다음 (다음 제목 전, 끝의 빈 줄 제외)
+            let end = lines[h + 1..].iter().position(|l| l.starts_with('#')).map_or(lines.len(), |i| h + 1 + i);
+            let mut at = end;
+            while at > h + 1 && lines[at - 1].trim().is_empty() { at -= 1; }
+            lines.insert(at, line);
+        }
+        None => {
+            while lines.last().is_some_and(|l| l.trim().is_empty()) { lines.pop(); }
+            lines.extend(["".into(), LIST_HEAD.into(), line]);
+        }
+    }
+    let tmp = f.with_extension("md.baro-tmp");
+    std::fs::write(&tmp, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &f).map_err(|e| e.to_string())?;
+    Ok(stem)
+}
+
 #[cfg(target_os = "macos")]
 fn clip_png() -> Option<Vec<u8>> {
     use objc2_app_kit::NSPasteboard;
@@ -167,6 +219,28 @@ mod tests {
         assert_eq!(clean_name("  chmod 권한 / 오류: 화면?\n둘째 줄"), "chmod-권한-오류-화면");
         assert_eq!(clean_name("[[a#b]]"), "ab");
         assert_eq!(clean_name("..."), "");
+    }
+
+    #[test]
+    fn attachment_list_note_gets_links() {
+        let v = std::env::temp_dir().join(format!("baro-shot-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&v);
+        let d = v.join("02_Knowledge").join("Linux");
+        std::fs::create_dir_all(d.join("attachments")).unwrap();
+        // 목록 노트가 없으면 "<폴더>-첨부목록.md"를 만듦
+        assert_eq!(add_to_list(&v, &d, &d.join("attachments/2026-11-19-a.png")).unwrap(), "Linux-첨부목록");
+        add_to_list(&v, &d, &d.join("attachments/2026-11-19-b.png")).unwrap();
+        let t = std::fs::read_to_string(d.join("Linux-첨부목록.md")).unwrap();
+        assert!(t.contains("# Linux 첨부 목록 (2개)"));
+        assert!(t.contains("### 빠른 메모 스크린샷\n- [[02_Knowledge/Linux/attachments/2026-11-19-a.png|2026-11-19-a.png]]\n- [[02_Knowledge/Linux/attachments/2026-11-19-b.png|2026-11-19-b.png]]\n"));
+        // 이미 있는 목록 노트(다른 칸 뒤)에 추가, 숫자 앞 폴더 번호는 뺌
+        let e = v.join("03_Daily");
+        std::fs::create_dir_all(&e).unwrap();
+        std::fs::write(e.join("Daily-첨부목록.md"), "# Daily 첨부 목록 (1개)\n\n### 옛것\n- [[x|x]]\n").unwrap();
+        assert_eq!(add_to_list(&v, &e, &e.join("attachments/2026-11-19-c.png")).unwrap(), "Daily-첨부목록");
+        let t = std::fs::read_to_string(e.join("Daily-첨부목록.md")).unwrap();
+        assert_eq!(t, "# Daily 첨부 목록 (2개)\n\n### 옛것\n- [[x|x]]\n\n### 빠른 메모 스크린샷\n- [[03_Daily/attachments/2026-11-19-c.png|2026-11-19-c.png]]\n");
+        let _ = std::fs::remove_dir_all(&v);
     }
 
     #[test]
