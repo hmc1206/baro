@@ -17,12 +17,28 @@ static STORE: Mutex<Option<HashMap<u64, Q>>> = Mutex::new(None);
 static FILE: OnceLock<PathBuf> = OnceLock::new();
 pub static BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub fn key(text: &str) -> u64 {
+pub fn key(text: &str) -> u64 { crate::vault::hash64(&[MODEL.as_bytes(), text.as_bytes()]) }
+
+// 예전 키 (std DefaultHasher, Rust 버전마다 달라질 수 있음). 기존 캐시를 새 키로 옮기는 데만 씀
+// TODO(2027-01): 모두 옮겨졌으면 legacy_key·adopt 삭제
+pub fn legacy_key(text: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     MODEL.hash(&mut h);
     text.hash(&mut h);
     h.finish()
+}
+
+// 예전 키로 저장된 벡터를 새 키로 옮김 (다시 계산하지 않게). 옮긴 개수
+pub fn adopt(pairs: &[(u64, u64)]) -> usize {
+    with(|m| {
+        let mut n = 0;
+        for &(old, new) in pairs {
+            if m.contains_key(&new) { continue; }
+            if let Some(q) = m.remove(&old) { m.insert(new, q); n += 1; }
+        }
+        n
+    })
 }
 
 pub fn clip(text: &str) -> String { text.chars().take(MAX_CHARS).collect() }
@@ -153,6 +169,8 @@ mod tests {
         assert!((score(&[0.6, 0.8], 2).unwrap() - 0.6).abs() < 0.01);
         save(Some(&[2u64].into_iter().collect()));
         assert!(!has(1) && has(2));
+        assert_eq!(adopt(&[(2, 7)]), 1); // 예전 키 → 새 키
+        assert!(!has(2) && has(7));
         let _ = std::fs::remove_file(&f);
     }
 }

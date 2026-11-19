@@ -24,13 +24,20 @@ pub fn looks_secret(s: &str) -> bool {
     if t.chars().any(char::is_whitespace) { return false; }
     let prefixes = ["sk-", "ghp_", "gho_", "ghs_", "github_pat_", "xoxb-", "xoxp-", "AKIA", "AIza", "glpat-"];
     if t.len() >= 20 && prefixes.iter().any(|p| t.starts_with(p)) { return true; }
-    // 공백 없는 16~100자에 대문자·소문자·숫자가 모두 섞였고 주소·경로가 아니면 (Bandit 비밀번호 같은 것)
+    // 공백 없는 16~100자, 주소·경로가 아니고, -·_로 나눈 한 덩어리가 무작위 글자처럼 보이면 (Bandit 비밀번호 같은 것)
     let n = t.chars().count();
     (16..=100).contains(&n)
-        && t.chars().any(|c| c.is_ascii_uppercase())
-        && t.chars().any(|c| c.is_ascii_lowercase())
-        && t.chars().any(|c| c.is_ascii_digit())
         && t.chars().all(|c| c.is_ascii_alphanumeric() || "+=_-".contains(c))
+        && t.split(['-', '_']).any(random_like)
+}
+
+// 16자 이상에 대문자·소문자·숫자가 모두 있고, 글자 종류(대·소·숫자)가 자주 바뀜
+// 무작위 글자는 약 60%의 자리에서 바뀌고, CanvasRenderingContext2D 같은 이름·날짜·파일명은 훨씬 적음
+fn random_like(s: &str) -> bool {
+    let kind = |c: char| if c.is_ascii_uppercase() { 0 } else if c.is_ascii_lowercase() { 1 } else if c.is_ascii_digit() { 2 } else { 3 };
+    let k: Vec<u8> = s.chars().map(kind).collect();
+    let n = k.len();
+    n >= 16 && [0, 1, 2].iter().all(|x| k.contains(x)) && k.windows(2).filter(|w| w[0] != w[1]).count() * 3 >= n
 }
 
 // 맨 앞에 넣기. 같은 글이 있으면 그 자리에서 빼고 맨 앞으로
@@ -141,6 +148,12 @@ mod tests {
         assert!(!looks_secret("https://github.com/hmc1206/baro"));
         assert!(!looks_secret("6d4023f8a1b2c3d4e5f60718293a4b5c6d7e8f90")); // git 커밋 해시 (대문자 없음)
         assert!(!looks_secret("안녕하세요"));
+        // 이름·날짜·파일명은 비밀번호가 아님
+        assert!(!looks_secret("2026-11-15-Baro-"));
+        assert!(!looks_secret("CanvasRenderingContext2D"));
+        assert!(!looks_secret("KakaoTalk_20231015_123456789"));
+        assert!(!looks_secret("ESP32-RS485-Gateway"));
+        assert!(looks_secret("aB3dE5gH7jK9mN1pQ3"));
     }
 
     #[test]

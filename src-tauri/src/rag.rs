@@ -104,19 +104,18 @@ fn chunks_of(body: &str) -> Vec<String> {
 
 // Vault 색인. 노트 목록(경로·수정 시각)이 그대로면 전에 만든 색인을 그대로 씀
 pub fn index(vault: &Path, skip: &[String]) -> std::sync::Arc<Index> {
-    use std::hash::{Hash, Hasher};
     let entries: Vec<_> = crate::vault::scan(vault).into_iter().filter(|e| {
         let p = Path::new(&e.path);
         !p.components().any(|c| c.as_os_str() == "attachments") && !skip.iter().any(|d| p.starts_with(d))
     }).collect();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    for e in &entries { e.path.hash(&mut h); e.mtime.hash(&mut h); e.len.hash(&mut h); }
-    skip.hash(&mut h);
-    let sig = h.finish();
+    let mut parts: Vec<Vec<u8>> = entries.iter().map(|e| [e.path.as_bytes(), &e.mtime.to_le_bytes(), &e.len.to_le_bytes()].concat()).collect();
+    parts.extend(skip.iter().map(|s| s.as_bytes().to_vec()));
+    let sig = crate::vault::hash64(&parts.iter().map(|p| p.as_slice()).collect::<Vec<_>>());
     if let Some(ix) = INDEX.lock().unwrap().as_ref().filter(|ix| ix.sig == sig) { return ix.clone(); }
     let mut docs = vec![];
     let mut chunks = vec![];
     let mut df: std::collections::HashMap<String, f32> = Default::default();
+    let mut legacy = vec![]; // (예전 키, 새 키)
     for e in &entries {
         let Some((front, body)) = split_front(&e.text) else { continue };
         let p = Path::new(&e.path);
@@ -132,10 +131,14 @@ pub fn index(vault: &Path, skip: &[String]) -> std::sync::Arc<Index> {
             for t in &head { *tf.entry(t.clone()).or_default() += TITLE_W; }
             for t in tf.keys() { *df.entry(t.clone()).or_default() += 1.0; }
             let len = body_toks.len() as f32 + head.len() as f32 * TITLE_W;
-            let ekey = crate::embed::key(&embed_text(&docs[d].title, &text));
+            let et = embed_text(&docs[d].title, &text);
+            let ekey = crate::embed::key(&et);
+            legacy.push((crate::embed::legacy_key(&et), ekey));
             chunks.push(Chunk { doc: d, pos, text, len, tf, ekey });
         }
     }
+    // 예전 키로 만든 뜻 색인이 있으면 새 키로 옮겨 저장 (Ollama로 다시 계산하지 않게)
+    if crate::embed::exists() && crate::embed::adopt(&legacy) > 0 { crate::embed::save(None); }
     let avg = (chunks.iter().map(|c| c.len).sum::<f32>() / chunks.len().max(1) as f32).max(1.0);
     let ix = std::sync::Arc::new(Index { sig, docs, chunks, df, avg });
     *INDEX.lock().unwrap() = Some(ix.clone());
@@ -323,11 +326,13 @@ mod tests {
     #[ignore]
     fn vault_search() {
         let q = std::env::var("BARO_Q").unwrap_or("SSH 키 설정".into());
+        // BARO_EMBED=파일: 임베딩 저장 파일로 뜻 검색까지 (색인 전에 열어야 예전 키도 옮김)
+        let ef = std::env::var("BARO_EMBED").ok();
+        if let Some(f) = &ef { crate::embed::init(Path::new(f)); }
         let ix = index(Path::new("/Volumes/Disk/MyBrain"), &[]);
-        println!("단락 {}개", ix.chunks.len());
-        // BARO_EMBED=파일: 임베딩 저장 파일로 뜻 검색까지
-        let qv = std::env::var("BARO_EMBED").ok().and_then(|f| {
-            crate::embed::init(Path::new(&f));
+        let have = ix.chunks.iter().filter(|c| crate::embed::has(c.ekey)).count();
+        println!("단락 {}개, 뜻 색인 있음 {}개", ix.chunks.len(), have);
+        let qv = ef.and_then(|_| {
             tauri::async_runtime::block_on(crate::embed::embed("http://localhost:11434", &[q.clone()])).ok().and_then(|mut v| v.pop())
         });
         for h in rank(&ix, &q, qv.as_deref(), 5) { println!("{} | {}자", h.file, h.excerpt.chars().count()); }

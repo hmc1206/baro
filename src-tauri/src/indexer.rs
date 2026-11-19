@@ -71,10 +71,7 @@ fn localize(v: &mut [AppEntry]) {
 
 // 아이콘 캐시 파일 경로 (앱 경로 해시)
 pub fn icon_file(cache: &Path, app: &str) -> PathBuf {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    app.hash(&mut h);
-    cache.join(format!("{:016x}.png", h.finish()))
+    cache.join(format!("{:016x}.png", crate::vault::hash64(&[app.as_bytes()])))
 }
 
 // NSWorkspace로 아이콘을 PNG로 저장 (캐시에 없는 것만)

@@ -24,6 +24,29 @@ static CACHE: Mutex<Option<HashMap<String, Arc<Entry>>>> = Mutex::new(None); // 
 static FILE: OnceLock<PathBuf> = OnceLock::new();
 static DIRTY: Mutex<bool> = Mutex::new(false);
 
+// Rust 버전이 바뀌어도 같은 값이 나오는 해시 (FNV-1a 64). 파일에 남는 키는 이것만 씀
+// (std DefaultHasher는 Rust 버전마다 알고리즘이 바뀔 수 있어 저장용으로 쓰면 안 됨)
+pub fn hash64(parts: &[&[u8]]) -> u64 {
+    const P: u64 = 0x100000001b3;
+    let mut h: u64 = 0xcbf29ce484222325;
+    for p in parts {
+        for &b in *p { h ^= b as u64; h = h.wrapping_mul(P); }
+        h ^= 0xff; h = h.wrapping_mul(P); // 조각 구분 ("ab","c" ≠ "a","bc")
+    }
+    h
+}
+
+// 비밀번호가 든 노트: 머리말에 password·key_file이 있거나, 본문에 비밀번호처럼 보이는 단어가 있음
+// → note-cache.json에 본문을 남기지 않음 (앱을 켤 때 이 노트들만 디스크에서 다시 읽음)
+fn secret(text: &str) -> bool {
+    if let Some(rest) = text.strip_prefix("---\n") {
+        let front = rest.find("\n---").map_or("", |e| &rest[..e]);
+        if front.lines().any(|l| l.starts_with("password:") || l.starts_with("key_file:")) { return true; }
+    }
+    text.contains("PRIVATE KEY-----")
+        || text.split(|c: char| !(c.is_ascii_alphanumeric() || "+=_-".contains(c))).any(crate::clip::looks_secret)
+}
+
 fn stamp(m: &std::fs::Metadata) -> u64 {
     m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos() as u64).unwrap_or(0)
 }
@@ -35,6 +58,8 @@ pub fn init(file: &Path) {
         .and_then(|b| serde_json::from_slice::<HashMap<String, Entry>>(&b).ok())
         .map(|m| m.into_iter().map(|(k, v)| (k, Arc::new(v))).collect())
         .unwrap_or_default();
+    // 예전 캐시에 비밀번호 노트 본문이 남아 있으면 다음 저장 때 지우도록
+    if map.values().any(|e| secret(&e.text)) { *DIRTY.lock().unwrap() = true; }
     let mut c = CACHE.lock().unwrap();
     if c.is_none() { *c = Some(map); }
 }
@@ -45,7 +70,7 @@ pub fn save() {
     if !*dirty { return; }
     let Some(f) = FILE.get() else { return };
     let snapshot: HashMap<String, Entry> = CACHE.lock().unwrap().as_ref()
-        .map(|m| m.iter().map(|(k, v)| (k.clone(), (**v).clone())).collect()).unwrap_or_default();
+        .map(|m| m.iter().filter(|(_, v)| !secret(&v.text)).map(|(k, v)| (k.clone(), (**v).clone())).collect()).unwrap_or_default();
     let Ok(b) = serde_json::to_vec(&snapshot) else { return };
     let tmp = f.with_extension("json.tmp");
     if std::fs::write(&tmp, b).is_err() { return; }
@@ -116,6 +141,35 @@ mod tests {
         let third = scan(&d);
         assert_eq!(third.len(), 1);
         assert_eq!(&*third[0].text, "에이 수정됨");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn hash_is_fixed() {
+        // 값이 바뀌면 저장된 임베딩·아이콘 캐시가 모두 무효가 됨 → 바꾸지 말 것
+        assert_eq!(hash64(&[]), 0xcbf29ce484222325);
+        assert_ne!(hash64(&[b"ab", b"c"]), hash64(&[b"a", b"bc"]));
+    }
+
+    #[test]
+    fn secret_notes_are_not_saved_to_disk() {
+        assert!(secret("---\nlevel: 1\npassword: \"x\"\n---\n# L1"));
+        assert!(secret("# Bandit\n다음 비번: aB3dE5gH7jK9mN1pQ3\n"));
+        assert!(!secret("# 일반 노트\nchmod 755 file.sh, https://example.com/a-b"));
+        let d = std::env::temp_dir().join(format!("baro-vault-secret-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("pw.md"), "---\npassword: \"zzSecret\"\n---\nL1").unwrap();
+        std::fs::write(d.join("ok.md"), "평범한 노트").unwrap();
+        let f = d.join("cache.json");
+        init(&f);
+        scan(&d);
+        *DIRTY.lock().unwrap() = true;
+        save();
+        let saved = std::fs::read_to_string(FILE.get().unwrap()).unwrap_or_default();
+        if FILE.get() == Some(&f) { // 다른 테스트가 먼저 FILE을 정하지 않았을 때만 확인
+            assert!(saved.contains("평범한 노트") && !saved.contains("zzSecret"));
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 }
