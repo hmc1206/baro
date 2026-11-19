@@ -107,6 +107,13 @@ const COMMANDS: Cmd[] = [
         text: on ? `어느 앱에서든 ;키워드를 치면 본문으로 바뀌어요 (영문 입력 상태에서).\n${config.snippets.map(s => `;${s.keyword} → ${s.name}`).join("\n")}\n\n스니펫은 Baro 설정(config.json)의 snippets에서 고쳐요.`
           : "이제 ;키워드를 쳐도 바뀌지 않아요." });
     } },
+  { id: "b-embed", title: "노트 뜻 색인 만들기", keys: "embedding index semantic 임베딩 뜻 의미 색인 노트 검색 bge", glyph: "notesAi",
+    run: async ui => {
+      const n = await invoke<number>("notes_embed_build");
+      ui.show({ kind: "text", title: n ? "노트 뜻 색인 만드는 중" : "노트 뜻 색인이 이미 최신이에요",
+        text: n ? `단락 ${n}개를 로컬 Ollama(bge-m3)로 계산해요. 몇 분 걸리고 그동안 CPU·GPU를 써요.\n창을 닫아도 계속 만들어요.`
+          : "내 노트에게 묻기가 단어 검색과 뜻 검색을 함께 써요. 노트가 바뀌면 질문할 때 바뀐 단락만 다시 계산해요." });
+    } },
   { id: "b-graph", title: "노트 그래프", keys: "graph vault 그래프 전체 노트 연결 링크 obsidian 옵시디언", glyph: "graph", run: async ui => ui.openGraph() },
   { id: "b-center", title: "Baro 창 위치 초기화", keys: "center reset window position 가운데 위치 초기화 창", glyph: "center", run: () => invoke("set_placed", { on: false }) },
   { id: "b-hotkeys", title: "단축키 설정", keys: "hotkey shortcut keyboard 단축키", glyph: "keyboard", run: async ui => ui.openHotkeys() },

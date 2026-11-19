@@ -2,7 +2,6 @@
 use serde::Serialize;
 use std::path::Path;
 use unicode_normalization::UnicodeNormalization;
-use walkdir::WalkDir;
 
 #[derive(Serialize)]
 pub struct Note {
@@ -14,24 +13,14 @@ pub struct Note {
 #[derive(Serialize)]
 pub struct Notes { pub notes: Vec<Note>, pub chapters: Vec<Note> }
 
-const MAX_FILES: usize = 5000;
-
-// 하위 폴더까지 .md 읽기. .obsidian·.trash 같은 숨김 폴더와 macOS의 ._ 파일은 건너뜀
+// 하위 폴더까지 .md 읽기 (vault.rs 캐시: 바뀐 파일만 다시 읽음)
 fn read_md(dir: &Path) -> Vec<Note> {
-    WalkDir::new(dir).max_depth(8).into_iter()
-        .filter_entry(|e| e.depth() == 0 || !e.file_name().to_string_lossy().starts_with('.'))
-        .filter_map(Result::ok)
-        .filter(|e| {
-            let n = e.file_name().to_string_lossy();
-            e.file_type().is_file() && n.ends_with(".md") && !n.starts_with("._")
-        })
-        .take(MAX_FILES)
-        .filter_map(|e| {
-            let text = std::fs::read_to_string(e.path()).ok()?;
-            let folder = e.path().parent()?.strip_prefix(dir).ok()?.to_string_lossy().nfc().collect();
-            Some(Note { file: e.path().to_string_lossy().nfc().collect(), folder, text: text.nfc().collect() })
-        })
-        .collect()
+    let base: String = dir.to_string_lossy().nfc().collect();
+    crate::vault::scan(dir).into_iter().map(|e| {
+        let parent = Path::new(&e.path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        let folder = parent.strip_prefix(&base).unwrap_or("").trim_start_matches('/').to_string();
+        Note { file: e.path.clone(), folder, text: e.text.to_string() }
+    }).collect()
 }
 
 // 명령어 사전은 "![[다른 노트#절]]" 임베드를 풀기 위해 상위 폴더의 노트도 함께 읽음
@@ -135,11 +124,9 @@ pub fn create_concept(vault: &str, src: &str, name: &str, date: &str) -> Result<
         return Err(format!("노트 이름으로 쓸 수 없는 글자가 있어요: {name}"));
     }
     let key = name.nfc().collect::<String>().to_lowercase();
-    for e in walkdir::WalkDir::new(v).into_iter().filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.')).flatten() {
-        let p = e.path();
-        if p.extension().and_then(|x| x.to_str()) != Some("md") { continue; }
-        let stem = p.file_stem().map(|s| s.to_string_lossy().nfc().collect::<String>().to_lowercase()).unwrap_or_default();
-        if stem == key { return Ok((p.to_string_lossy().into_owned(), false)); }
+    for e in crate::vault::scan(v) {
+        let stem = Path::new(&e.path).file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if stem == key { return Ok((e.path.clone(), false)); }
     }
     let src_p = Path::new(src);
     if !src_p.starts_with(v) { return Err("Vault 밖의 노트예요.".into()); }

@@ -675,6 +675,12 @@ export default function App() {
       listen("indexed", () => setRev(r => r + 1)),
       listen<{ id: number; text: string }>("ai-chunk", e =>
         setAi(a => a && a.id === e.payload.id ? { ...a, text: a.text + e.payload.text } : a)),
+      // 노트 뜻 색인 만들기 진행 (그 결과 화면이 떠 있을 때만 갱신)
+      listen<{ done: number; total: number }>("embed-progress", e => setView(v => v?.kind === "text" && v.title.startsWith("노트 뜻 색인")
+        ? { ...v, title: "노트 뜻 색인 만드는 중", text: `${e.payload.done} / ${e.payload.total} 단락 (${Math.round(e.payload.done / Math.max(1, e.payload.total) * 100)}%)\n창을 닫아도 계속 만들어요.` } : v)),
+      listen<{ total: number; count: number; error: string | null }>("embed-done", e => setView(v => v?.kind === "text" && v.title.startsWith("노트 뜻 색인")
+        ? e.payload.error ? { kind: "text", title: "노트 뜻 색인을 만들지 못했어요", text: e.payload.error, error: true }
+          : { kind: "text", title: "노트 뜻 색인을 만들었어요", text: `단락 ${e.payload.count}개. 이제 내 노트에게 묻기가 단어 검색과 뜻 검색을 함께 써요.` } : v)),
       listen<{ id: number; error: string | null }>("ai-done", e =>
         setAi(a => a && a.id === e.payload.id ? { ...a, busy: false, error: e.payload.error } : a)),
     ];

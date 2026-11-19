@@ -2,16 +2,18 @@
 mod ai;
 mod clip;
 mod config;
+mod embed;
 mod expand;
 mod extensions;
 mod indexer;
 mod rag;
 mod search;
 mod system;
+mod vault;
 mod wiki;
 
 use base64::Engine;
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use std::{collections::HashMap, path::{Path, PathBuf}, sync::Mutex};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -320,12 +322,54 @@ async fn ask_notes(id: u32, question: String, app: AppHandle) -> Result<Vec<rag:
     if !vault.is_dir() { return Err(format!("Vault를 읽을 수 없어요. 외장 디스크 연결을 확인하세요.\n{}", c.vault_dir)); }
     // 비밀번호 모음 폴더는 통째로 제외
     let skip: Vec<String> = c.note_searches.iter().filter(|n| n.kind == "passwords").map(|n| n.dir.clone()).collect();
-    let q = question.clone();
-    let hits = tauri::async_runtime::spawn_blocking(move || rag::search(&vault, &skip, &q, 5)).await.map_err(|e| e.to_string())?;
+    let skip = rag::skip_list(&skip);
+    let ix = tauri::async_runtime::spawn_blocking(move || { let ix = rag::index(&vault, &skip); vault::save(); ix }).await.map_err(|e| e.to_string())?;
+    // 뜻 검색: "노트 뜻 색인 만들기"를 한 번 해 둔 경우에만. 바뀐 단락이 조금(64개 이하)이면 지금 계산
+    let url = c.ollama_url.trim_end_matches('/').to_string();
+    let mut qvec = None;
+    if embed::exists() && embed::count() > 0 {
+        let items = rag::embed_items(&ix);
+        let missing = items.iter().filter(|(k, _)| !embed::has(*k)).count();
+        if missing > 0 && missing <= 64 && !embed::BUSY.load(std::sync::atomic::Ordering::Relaxed)
+            && embed::fill(&url, &items, 16, |_, _| {}).await.is_ok() {
+            embed::save(Some(&rag::embed_keys(&ix)));
+        }
+        qvec = embed::embed(&url, std::slice::from_ref(&question)).await.ok().and_then(|mut v| v.pop());
+    }
+    let hits = rag::rank(&ix, &question, qvec.as_deref(), 5);
     if hits.is_empty() { return Err("질문과 관련된 노트를 찾지 못했어요. 노트에 나올 만한 단어로 물어보세요.".into()); }
     let sources = hits.iter().map(|h| rag::Source { title: h.title.clone(), file: h.file.clone() }).collect();
     tauri::async_runtime::spawn(ai::ask(app, c, id, rag::prompt(&question, &hits)));
     Ok(sources)
+}
+
+// 노트 뜻 색인 만들기 (bge-m3): 없는 단락만 계산. 진행은 embed-progress, 끝나면 embed-done 이벤트. 돌려주는 값: 계산할 단락 수
+#[tauri::command]
+async fn notes_embed_build(app: AppHandle) -> Result<usize, String> {
+    use std::sync::atomic::Ordering;
+    let c = config::load(&config_file(&app))?;
+    let vault = std::path::PathBuf::from(&c.vault_dir);
+    if !vault.is_dir() { return Err(format!("Vault를 읽을 수 없어요. 외장 디스크 연결을 확인하세요.\n{}", c.vault_dir)); }
+    if embed::BUSY.swap(true, Ordering::SeqCst) { return Err("이미 만들고 있어요.".into()); }
+    let skip = rag::skip_list(&c.note_searches.iter().filter(|n| n.kind == "passwords").map(|n| n.dir.clone()).collect::<Vec<_>>());
+    let ix = match tauri::async_runtime::spawn_blocking(move || rag::index(&vault, &skip)).await {
+        Ok(ix) => ix,
+        Err(e) => { embed::BUSY.store(false, Ordering::SeqCst); return Err(e.to_string()); }
+    };
+    let items = rag::embed_items(&ix);
+    let todo = items.iter().filter(|(k, _)| !embed::has(*k)).count();
+    let url = c.ollama_url.trim_end_matches('/').to_string();
+    tauri::async_runtime::spawn(async move {
+        let a = app.clone();
+        let r = embed::fill(&url, &items, 16, |done, total| {
+            let _ = a.emit("embed-progress", serde_json::json!({ "done": done, "total": total }));
+            if done % 320 == 0 { embed::save(None); } // 중간 저장 (도중에 꺼져도 이어서)
+        }).await;
+        embed::save(Some(&rag::embed_keys(&ix)));
+        embed::BUSY.store(false, Ordering::SeqCst);
+        let _ = app.emit("embed-done", serde_json::json!({ "total": todo, "count": embed::count(), "error": r.err() }));
+    });
+    Ok(todo)
 }
 
 #[tauri::command]
@@ -438,7 +482,7 @@ async fn notes_load(id: String, app: AppHandle) -> Result<wiki::Notes, String> {
     // "__vault": 전체 노트 그래프용. Vault 전체를 일반 노트 방식으로 읽음
     let s = if id == "__vault" { config::NoteSearch { id, name: String::new(), dir: c.vault_dir.clone(), kind: "notes".into() } }
         else { c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")? };
-    tauri::async_runtime::spawn_blocking(move || wiki::load(&s.dir, &s.kind)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || { let r = wiki::load(&s.dir, &s.kind); vault::save(); r }).await.map_err(|e| e.to_string())?
 }
 
 fn note_dir(app: &AppHandle, id: &str) -> Result<String, String> {
@@ -614,6 +658,12 @@ fn main() {
                 expand::set_snippets(&c.snippets);
                 if c.snippet_expand && !expand::enable(true) { eprintln!("스니펫 자동 확장: 입력 모니터링 권한 필요"); }
             }
+            // 노트 캐시: 저장해 둔 것을 읽고, 뒤에서 Vault를 한 번 훑어 바뀐 노트만 새로 읽어 둠
+            vault::init(&data_dir(&h).join("note-cache.json"));
+            embed::init(&data_dir(&h).join("embed-cache.bin"));
+            if let Ok(c) = config::load(&config_file(&h)) {
+                std::thread::spawn(move || { vault::scan(Path::new(&c.vault_dir)); vault::save(); });
+            }
             clip::start(&data_dir(&h).join("clipboard.json"), config::load(&config_file(&h)).map(|c| c.clipboard_history).unwrap_or(true));
             if let Ok(b) = std::fs::read(usage_file(&h)) {
                 if let Ok(u) = serde_json::from_slice(&b) { *h.state::<AppState>().usage.lock().unwrap() = u; }
@@ -651,7 +701,7 @@ fn main() {
             if *app.state::<AppState>().suspended.lock().unwrap() { register_hotkeys(app); }
         })
         .invoke_handler(tauri::generate_handler![search, icon, launch, open_path, reveal, files_wide, open_url, hide,
-            files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, save_ai,
+            files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, notes_embed_build, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
             notes_load, note_set_field, note_toggle_task, note_add_record, memo_daily, memo_daily_read, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
