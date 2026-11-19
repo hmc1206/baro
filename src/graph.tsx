@@ -30,20 +30,65 @@ function folderHues(docs: Doc[], folderOf: (d: Doc) => string) {
   return list.map(([name, n], i) => ({ name, n, hue: Math.round((210 + i * 137.5) % 360) }));
 }
 
-// [[대상]], [[대상|별칭]], [[대상#절]], ![[임베드]] → 대상 노트 이름
-function linksOf(d: Doc): string[] {
-  const out = [...d.body.matchAll(/\[\[([^\]|#]+)/g)].map(m => m[1].split("/").pop()!.trim());
-  return [...out, ...d.related];
+// 코드 블록(```·~~~)과 인라인 코드(`…`) 안의 [[…]]는 링크가 아니므로 지움
+export function stripCode(body: string): string {
+  const out: string[] = [];
+  let fence = "";
+  for (const line of body.split("\n")) {
+    const m = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fence) { if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = ""; continue; }
+    if (m) { fence = m[1]; continue; }
+    out.push(line.replace(/(`+)[^`]*?\1/g, ""));
+  }
+  return out.join("\n");
+}
+
+// [[대상]], [[폴더/대상|별칭]], [[대상#절]], ![[임베드]] → 대상 (경로가 있으면 경로 포함, .md 제외)
+export function linksOf(d: Doc): string[] {
+  const out = [...stripCode(d.body).matchAll(/\[\[([^\]|#]+)/g)].map(m => m[1]);
+  return [...out, ...d.related].map(l => l.split("#")[0].trim().replace(/\.md$/i, "")).filter(Boolean);
+}
+
+const dirOf = (file: string) => file.split("/").slice(0, -1);
+const shared = (a: string[], b: string[]) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+
+// 링크 → 노트 번호. 같은 이름이 여러 개면 Obsidian처럼:
+// 경로를 적었으면 경로가 맞는 노트, 아니면 보내는 노트와 같은(가까운) 폴더 → 경로가 짧은 노트
+export function resolver(docs: Doc[]) {
+  const byBase = new Map<string, number[]>();
+  const byName = new Map<string, number>();
+  docs.forEach((d, i) => {
+    const k = baseName(d.file).toLowerCase();
+    byBase.set(k, [...(byBase.get(k) ?? []), i]);
+    if (!byName.has(d.name.toLowerCase())) byName.set(d.name.toLowerCase(), i);
+  });
+  return (link: string, from: Doc): number | undefined => {
+    const parts = link.toLowerCase().split("/").filter(Boolean);
+    const cands = byBase.get(parts[parts.length - 1] ?? "");
+    if (!cands) return parts.length === 1 ? byName.get(parts[0]) : undefined;
+    if (cands.length === 1) return cands[0];
+    let list = cands;
+    if (parts.length > 1) {
+      // macOS 파일 이름은 한글이 NFD라 NFC로 맞춰 비교
+      const tail = ("/" + parts.join("/") + ".md").normalize("NFC");
+      const hit = cands.filter(i => ("/" + docs[i].file.toLowerCase()).normalize("NFC").endsWith(tail));
+      if (hit.length) list = hit;
+    }
+    const src = dirOf(from.file);
+    return [...list].sort((a, b) => {
+      const da = dirOf(docs[a].file), db = dirOf(docs[b].file);
+      return shared(db, src) - shared(da, src) || da.length - db.length || docs[a].file.localeCompare(docs[b].file);
+    })[0];
+  };
 }
 
 // 방향 있는 링크 [보내는 노트, 받는 노트] (중복 제거)
 function directed(docs: Doc[]) {
-  const byName = new Map<string, number>();
-  docs.forEach((d, i) => { byName.set(baseName(d.file).toLowerCase(), i); if (!byName.has(d.name.toLowerCase())) byName.set(d.name.toLowerCase(), i); });
+  const resolve = resolver(docs);
   const seen = new Set<string>();
   const out: [number, number][] = [];
   docs.forEach((d, i) => linksOf(d).forEach(l => {
-    const j = byName.get(l.toLowerCase());
+    const j = resolve(l, d);
     if (j === undefined || j === i || seen.has(`${i}>${j}`)) return;
     seen.add(`${i}>${j}`); out.push([i, j]);
   }));
