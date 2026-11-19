@@ -11,6 +11,7 @@ mod search;
 mod system;
 mod vault;
 mod wiki;
+mod window;
 
 use base64::Engine;
 use std::{collections::HashMap, path::{Path, PathBuf}, sync::Mutex};
@@ -28,14 +29,9 @@ struct AppState {
     dialog_open: Mutex<bool>, // 폴더 선택 창이 떠 있는 동안에는 포커스를 잃어도 숨기지 않음
     pinned: Mutex<bool>, // 창 고정: 다른 앱을 눌러도 숨기지 않고 화면 위에 계속 띄움
     prev_bundle: Mutex<Option<String>>, // Baro 직전에 앞에 있던 앱 (고정 중 포커스 돌려주기용)
-    pinned_size: Mutex<Option<(f64, f64)>>, // 고정 중에 사용자가 맞춘 창 크기 (다음 고정 때 다시 사용)
     placed: Mutex<bool>, // 사용자가 끌기 막대로 창을 옮겼으면 다음에 열 때도 그 자리에 띄움
 }
 
-// 창 크기 (논리 픽셀). 고정하면 작게 줄이고 크기 조절을 허용
-const NORMAL_SIZE: (f64, f64) = (760.0, 480.0);
-const PINNED_SIZE: (f64, f64) = (480.0, 400.0);
-const PINNED_MIN: (f64, f64) = (360.0, 220.0);
 
 fn data_dir(app: &AppHandle) -> PathBuf { app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("baro")) }
 fn icon_dir(app: &AppHandle) -> PathBuf {
@@ -74,26 +70,27 @@ fn set_placed(on: bool, app: AppHandle, win: WebviewWindow) {
 
 #[tauri::command]
 fn set_pinned(on: bool, app: AppHandle, win: WebviewWindow) -> bool {
-    use tauri::LogicalSize;
     let st = app.state::<AppState>();
     let was = std::mem::replace(&mut *st.pinned.lock().unwrap(), on);
-    if on && !was {
-        // 창 왼쪽 위 위치는 그대로 두고 크기만 줄임
-        let (w, h) = st.pinned_size.lock().unwrap().unwrap_or(PINNED_SIZE);
-        let _ = win.set_resizable(true);
-        let _ = win.set_min_size(Some(LogicalSize::new(PINNED_MIN.0, PINNED_MIN.1)));
-        let _ = win.set_size(LogicalSize::new(w, h));
-    } else if !on && was {
-        // 사용자가 맞춘 크기를 기억해 두고 원래 크기로
-        if let (Ok(s), Ok(f)) = (win.inner_size(), win.scale_factor()) {
-            *st.pinned_size.lock().unwrap() = Some((s.width as f64 / f, s.height as f64 / f));
-        }
-        let _ = win.set_min_size(None::<LogicalSize<f64>>);
-        let _ = win.set_size(LogicalSize::new(NORMAL_SIZE.0, NORMAL_SIZE.1));
-        let _ = win.set_resizable(false);
-        if !*st.placed.lock().unwrap() { let _ = win.center(); }
-    }
+    // 고정하면 고정 크기로 (왼쪽 위 위치는 그대로), 풀면 지금 화면 종류의 크기로
+    if on != was { window::apply(&win, on, !on && !*st.placed.lock().unwrap()); }
     on
+}
+
+// 화면 종류(normal·wide·graph)가 바뀌면 그 종류에 기억한 크기로. 고정 중에는 크기를 바꾸지 않음
+#[tauri::command]
+fn set_view(kind: String, app: AppHandle, win: WebviewWindow) {
+    let st = app.state::<AppState>();
+    let pinned = *st.pinned.lock().unwrap();
+    if window::set_view(&kind) && !pinned { window::apply(&win, false, !*st.placed.lock().unwrap()); }
+}
+
+// 기억한 창 크기를 모두 지우고 기본 크기로
+#[tauri::command]
+fn window_reset(app: AppHandle, win: WebviewWindow) {
+    let st = app.state::<AppState>();
+    window::reset();
+    window::apply(&win, *st.pinned.lock().unwrap(), !*st.placed.lock().unwrap());
 }
 
 #[tauri::command]
@@ -661,6 +658,13 @@ fn main() {
             // 노트 캐시: 저장해 둔 것을 읽고, 뒤에서 Vault를 한 번 훑어 바뀐 노트만 새로 읽어 둠
             vault::init(&data_dir(&h).join("note-cache.json"));
             embed::init(&data_dir(&h).join("embed-cache.bin"));
+            // 창 크기: 화면 종류마다 기억한 크기 (가장자리를 끌어 조절)
+            window::init(&data_dir(&h).join("window.json"));
+            if let Some(w) = h.get_webview_window("main") {
+                let _ = w.set_resizable(true);
+                let _ = w.set_min_size(Some(tauri::LogicalSize::new(window::MIN.0, window::MIN.1)));
+                window::apply(&w, false, true);
+            }
             if let Ok(c) = config::load(&config_file(&h)) {
                 std::thread::spawn(move || { vault::scan(Path::new(&c.vault_dir)); vault::save(); });
             }
@@ -678,7 +682,10 @@ fn main() {
             });
             Ok(())
         })
-        .on_window_event(|w, e| if let WindowEvent::Focused(false) = e {
+        .on_window_event(|w, e| if let WindowEvent::Resized(_) = e {
+            let pinned = *w.app_handle().state::<AppState>().pinned.lock().unwrap();
+            if let Some(win) = w.app_handle().get_webview_window(w.label()) { window::resized(&win, pinned); }
+        } else if let WindowEvent::Focused(false) = e {
             let st = w.app_handle().state::<AppState>();
             if *st.dialog_open.lock().unwrap() { return; }
             if *st.pinned.lock().unwrap() {
@@ -705,7 +712,7 @@ fn main() {
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
             notes_load, note_set_field, note_toggle_task, note_add_record, memo_daily, memo_daily_read, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
-            close_window, set_pinned, set_placed, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
+            close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
         .run(tauri::generate_context!())
         .expect("Baro 실행 실패");
 }

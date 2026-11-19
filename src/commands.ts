@@ -116,6 +116,7 @@ const COMMANDS: Cmd[] = [
     } },
   { id: "b-graph", title: "노트 그래프", keys: "graph vault 그래프 전체 노트 연결 링크 obsidian 옵시디언", glyph: "graph", run: async ui => ui.openGraph() },
   { id: "b-center", title: "Baro 창 위치 초기화", keys: "center reset window position 가운데 위치 초기화 창", glyph: "center", run: () => invoke("set_placed", { on: false }) },
+  { id: "b-size", title: "Baro 창 크기 초기화", keys: "size reset window resize 크기 초기화 창 기본 크기", glyph: "center", run: () => invoke("window_reset") },
   { id: "b-hotkeys", title: "단축키 설정", keys: "hotkey shortcut keyboard 단축키", glyph: "keyboard", run: async ui => ui.openHotkeys() },
   { id: "b-store", title: "확장 스토어", keys: "extension store install 확장 스토어 설치", glyph: "download", run: async ui => ui.openStore() },
   { id: "b-perm", title: "Baro 권한 확인", keys: "permission accessibility 권한 손쉬운 사용", glyph: "shield",

@@ -585,6 +585,9 @@ export default function App() {
     : mode === "clip" ? clipItems()
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
   const graphOn = mode === "note" && graph;
+  // 창 크기 종류: 그래프는 가장 크게, 미리보기가 있는 화면·AI 답변은 넓게. 종류마다 사용자가 맞춘 크기를 기억
+  const sizeKind = graphOn ? "graph" : ai || mode === "note" || mode === "memo" || mode === "clip" ? "wide" : "normal";
+  useEffect(() => { invoke("set_view", { kind: sizeKind }); }, [sizeKind]);
   const curClip = mode === "clip" ? clips.list.find(c => `clip-${c.at}` === items[sel]?.id) : undefined;
   const curDoc = mode === "note" ? (graphOn && pick ? pick : noteList[sel]) : undefined;
   // 미리보기: 가는·오는 링크, 아직 없는 링크 (비밀번호 모음 제외)
@@ -1082,7 +1085,7 @@ export default function App() {
         </div>
       )}
       {/* 하단 막대: 끌어서 창을 옮김. "deep"이라 막대 안 글자·키 표시 위를 눌러도 끌림 (핀 버튼은 제외) */}
-      <footer className="foot" data-tauri-drag-region="deep" title={pinned ? "하단 막대를 끌어 창 이동 · 가장자리를 끌어 크기 조절" : undefined}>
+      <footer className="foot" data-tauri-drag-region="deep" title="하단 막대를 끌어 창 이동 · 가장자리를 끌어 크기 조절 (화면 종류마다 기억)">
         {pending ? <span className="warn">{pending.confirm}</span> : <span className="brand">
           <button className={pinned ? "pin on" : "pin"} title={pinned ? "고정 해제 (⌘P)" : "창 고정 (⌘P)"}
             onMouseDown={e => e.preventDefault()} onClick={togglePin}>

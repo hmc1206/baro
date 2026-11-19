@@ -25,6 +25,7 @@ Tauri 2(Rust) + React/TypeScript로 만들었어요.
 | 확장 스토어 | 셸 스크립트 확장 설치·실행·삭제 (예제: 개발 도구, 시스템 정보, 텍스트 도구) |
 | 단축키 설정 | 기능·노트 검색·퀵링크마다 전역 단축키를 눌러서 지정 |
 | 창 고정 | ⌘P. 맨 앞에 남고, 작게 줄여 옆에 띄워 둘 수 있어요. 맨 위 막대로 창 이동 |
+| 창 크기 | 가장자리를 끌어 조절. 목록 · 미리보기 화면(노트·클립보드·메모·AI 답변) · 그래프 · 고정 창마다 크기를 따로 기억해 다시 켜도 유지돼요. 미리보기·그래프는 처음엔 자동으로 크게 열려요. `Baro 창 크기 초기화`로 기본 크기로 |
 
 ## 설치·실행
 
@@ -81,6 +82,7 @@ cp -R src-tauri/target/release/bundle/macos/Baro.app /Applications/
 | 경로 | 역할 |
 |---|---|
 | `src-tauri/src/main.rs` | Tauri 명령, 전역 단축키, 창 표시·숨김·고정 |
+| `src-tauri/src/window.rs` | 화면 종류별 창 크기 기억 (`window.json`), 화면 밖으로 나가지 않게 |
 | `src-tauri/src/config.rs` | `config.json` 읽기/쓰기와 기본값 |
 | `src-tauri/src/indexer.rs`, `search.rs` | 앱 목록·아이콘·한글 이름, 퍼지 검색 |
 | `src-tauri/src/wiki.rs` | 노트 읽기, AI 답변 저장, 머리말 수정·새 노트·개념 노트 |
