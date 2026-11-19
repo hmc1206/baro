@@ -23,6 +23,6 @@ futures-util = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSWorkspace", "NSRunningApplication"] }
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSData", "NSFileManager", "NSURL", "NSError"] }
 objc2-core-foundation = { version = "0.3", features = ["CFMachPort", "CFRunLoop", "CFString", "CFCGTypes"] }
 objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes", "CGRemoteOperation", "CGEventSource"] }

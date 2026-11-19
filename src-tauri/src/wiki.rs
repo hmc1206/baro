@@ -62,7 +62,7 @@ pub fn save_ai(dir: &str, date: &str, question: &str, answer: &str, model: &str)
 }
 
 // 노트 검색 폴더 안의 파일인지 확인 (다른 위치의 파일은 고치지 않음)
-fn inside(dir: &str, file: &str) -> Result<std::path::PathBuf, String> {
+pub fn inside(dir: &str, file: &str) -> Result<std::path::PathBuf, String> {
     let d = Path::new(dir).canonicalize().map_err(|e| format!("폴더를 찾을 수 없어요: {e}"))?;
     let f = Path::new(file).canonicalize().map_err(|e| format!("노트를 찾을 수 없어요: {e}"))?;
     if !f.starts_with(&d) || f.extension().and_then(|e| e.to_str()) != Some("md") { return Err("노트 검색 폴더 밖의 파일은 고칠 수 없어요.".into()); }

@@ -4,7 +4,7 @@
 // - 최근 200개만, clipboard.json(나만 읽기 권한 600)에 저장
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -16,6 +16,7 @@ const MAX_LEN: usize = 100_000; // 이보다 긴 글(큰 로그 등)은 저장 �
 static LIST: Mutex<Vec<Clip>> = Mutex::new(Vec::new());
 static FILE: OnceLock<PathBuf> = OnceLock::new();
 pub static ENABLED: AtomicBool = AtomicBool::new(true);
+pub static IMAGE_AT: AtomicI64 = AtomicI64::new(0); // 클립보드에 이미지가 들어온 시각 (빠른 메모 스크린샷용, 이미지는 저장하지 않음)
 
 // 키·토큰·비밀번호처럼 보이는 글
 pub fn looks_secret(s: &str) -> bool {
@@ -114,9 +115,10 @@ mod mac {
             let n = pb.changeCount();
             if n == last { continue; }
             last = n;
-            if !ENABLED.load(Ordering::Relaxed) { continue; }
             let types: Vec<String> = pb.types().map(|t| t.iter().map(|s| s.to_string()).collect()).unwrap_or_default();
             if types.iter().any(|t| SKIP.contains(&t.as_str())) { continue; }
+            if types.iter().any(|t| t == "public.png" || t == "public.tiff") { IMAGE_AT.store(now_ms(), Ordering::Relaxed); }
+            if !ENABLED.load(Ordering::Relaxed) { continue; }
             let Some(text) = pb.stringForType(unsafe { NSPasteboardTypeString }) else { continue };
             let app = NSWorkspace::sharedWorkspace().frontmostApplication()
                 .and_then(|a| a.localizedName()).map(|s| s.to_string()).unwrap_or_default();

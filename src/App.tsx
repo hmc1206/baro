@@ -137,7 +137,9 @@ function clipDay(ms: number) {
 const clipTime = (ms: number) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 // 빠른 메모: 기록할 커리큘럼 단계(없으면 Daily만), 어디서 왔는지(Esc로 돌아갈 곳), 결과 문구
 type Stage = { search: NoteSearch; doc: Doc };
-type Memo = { stage: Stage | null; from: Mode; saved: string | null; error: string | null; finding?: boolean; daily?: string; dailyDate?: string };
+// 빠른 메모에 붙인 스크린샷 (⌘I): 클립보드 이미지 또는 스크린샷 파일
+type Shot = { source: "clip" | "file"; path: string | null; at: number; preview: string };
+type Memo = { stage: Stage | null; from: Mode; saved: string | null; error: string | null; finding?: boolean; daily?: string; dailyDate?: string; shot?: Shot | null };
 // 지운 기록 (⌘Z로 되돌리기): sec는 "daily" 또는 칸 이름
 type Removed = { sec: string; id: string; file: string; date: string; line: number; text: string };
 const RECORD = { learn: "배운 점", stuck: "막힌 점과 해결", cmd: "사용한 명령어" } as const;
@@ -406,16 +408,39 @@ export default function App() {
     if (!clip) return memoFail("클립보드가 비어 있어요.");
     await saveRecord(RECORD.cmd, cmdBlock(clip));
   };
+  // 스크린샷 파일 이름: 메모 첫 줄 (비어 있으면 스크린샷-시각)
+  const shotName = (text: string) => text.split("\n")[0].trim() || `스크린샷-${now().time.replace(":", "")}`;
+  // 붙인 스크린샷을 메모할 노트 옆 attachments/에 저장하고 "![[파일]]"을 돌려줌. 없으면 "", 실패하면 null
+  const attachShot = async (text: string, id: string, file: string): Promise<string | null> => {
+    const s = memo.shot;
+    if (!s) return "";
+    try {
+      const f = await invoke<string>("shot_save", { source: s.source, path: s.path, name: shotName(text), date: now().date, id, file });
+      setMemo(m => ({ ...m, shot: null }));
+      return `![[${f}]]`;
+    } catch (e) { memoFail(e); return null; }
+  };
+  const toggleShot = () => memo.shot ? setMemo(m => ({ ...m, shot: null }))
+    : invoke<Shot>("shot_latest").then(shot => setMemo(m => ({ ...m, shot, saved: null, error: null }))).catch(memoFail);
   // 메모 화면 목록: 저장할 곳 (순서 고정). "!"·"$"로 시작하면 막힌 점·명령어로 선택이 옮겨 가고 그 글자는 빼고 저장
   const memoItems = (): Item[] => {
     const raw = q.trim(), pre = raw[0] === "!" || raw[0] === "$";
     const text = pre ? raw.slice(1).trim() : raw;
     const st = memo.stage, short = st?.doc.name.split(":")[0] ?? "";
     const rec = (section: string, glyph: string): Item => ({ id: `memo-${section}`, title: `${short} · ${section}`, subtitle: st!.doc.name, kind: "wiki", glyph,
-      actions: [{ title: "기록", keep: true, run: async () => { if (text) await saveRecord(section, section === RECORD.cmd ? cmdBlock(text) : listBlock(text)); } }] });
+      actions: [{ title: "기록", keep: true, run: async () => {
+        if (!text && !memo.shot) return;
+        const emb = await attachShot(text, st!.search.id, st!.doc.file);
+        if (emb === null) return;
+        await saveRecord(section, section === RECORD.cmd ? [text && cmdBlock(text), emb].filter(Boolean).join("\n") : listBlock([text, emb].filter(Boolean).join("\n")));
+      } }] });
     const recs = st ? [rec(RECORD.learn, "learn"), rec(RECORD.stuck, "stuck"), rec(RECORD.cmd, "cmdlog")] : [];
     const daily: Item = { id: "memo-daily", title: "오늘 Daily에 메모", subtitle: `03_Daily/${now().date}.md`, kind: "wiki", glyph: "daily",
-      actions: [{ title: "메모", keep: true, run: () => saveDaily(raw) }] };
+      actions: [{ title: "메모", keep: true, run: async () => {
+        if (!raw && !memo.shot) return;
+        const emb = await attachShot(raw, "", "");
+        if (emb !== null) await saveDaily([raw, emb].filter(Boolean).join("\n"));
+      } }] };
     // 클립보드 기록은 입력이 비어 있을 때만 (입력한 메모 대신 클립보드가 저장되는 실수 방지). 맨 끝이라 다른 칸 순서는 그대로
     const clip: Item[] = st && !raw ? [{ id: "memo-clip", title: "클립보드를 명령어로 기록", subtitle: `${short} · ${RECORD.cmd}`, kind: "wiki", glyph: "clip",
       actions: [{ title: "기록", keep: true, run: saveClipboard }] }] : [];
@@ -805,6 +830,7 @@ export default function App() {
     if (mode === "memo" && !view && !menu) {
       if (e.metaKey && e.code === "KeyZ" && !q && removed) { e.preventDefault(); undoRemove(); return; }
       if (e.key === "Escape" && delPending) { e.preventDefault(); setDelPending(null); return; }
+      if (e.metaKey && e.code === "KeyI") { e.preventDefault(); toggleShot(); return; } // 방금 찍은 스크린샷 붙이기·빼기
       if (e.key === "Enter" && e.shiftKey) return; // 줄바꿈
       if (e.key === "Tab") { e.preventDefault(); const n = items.length || 1; setSel(s => (s + (e.shiftKey ? n - 1 : 1)) % n); return; }
       if (q.includes("\n") && (e.key === "ArrowUp" || e.key === "ArrowDown")) return; // 여러 줄: 커서 이동
@@ -882,13 +908,13 @@ export default function App() {
     : mode === "ask" ? "AI에게 물어보기 (Enter · ⌘↵ 내 노트에서 찾아 묻기)"
     : mode === "files" ? "파일 이름 (홈 · 외장 디스크)"
     : mode === "clip" ? "복사했던 글 검색"
-    : mode === "memo" ? "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 · ! 막힌 점 · $ 명령어"
+    : mode === "memo" ? (memo.shot ? "스크린샷 이름 겸 메모 · Enter 저장 · ⌘I 빼기" : "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 · ! 막힌 점 · $ 명령어 · ⌘I 스크린샷")
     : "앱, 파일, 명령, 계산, AI에게 묻기";
   const header = home ? "Baro로 할 수 있는 일"
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`
     : mode === "files" ? (found.loading ? "찾는 중…" : q.trim() ? `파일 ${found.items.length}개` : "파일 이름을 입력하세요 · Enter로 Finder에서 보기")
     : mode === "clip" ? (q.trim() ? `찾은 기록 ${items.filter(i => i.id.startsWith("clip-") && !["clip-toggle", "clip-clear"].includes(i.id)).length}개` : clips.enabled ? null : "기록을 멈춘 상태예요")
-    : mode === "memo" ? (memo.saved ? `✓ ${memo.saved}` : memo.finding ? "공부 중인 단계 찾는 중…" : memo.stage ? `지금 단계: ${memo.stage.doc.name}` : "공부 중인 커리큘럼 단계가 없어 Daily에 적어요")
+    : mode === "memo" ? (memo.shot ? `스크린샷 붙임 · 저장 이름: ${now().date}-${shotName(q.replace(/^\s*[!$]/, ""))}` : memo.saved ? `✓ ${memo.saved}` : memo.finding ? "공부 중인 단계 찾는 중…" : memo.stage ? `지금 단계: ${memo.stage.doc.name}` : "공부 중인 커리큘럼 단계가 없어 Daily에 적어요")
     : mode === "note" && (notes.loading || q.trim()) ? (notes.loading ? "노트 불러오는 중…" : `검색 결과 ${noteList.length}개`)
     : null;
   const empty = mode === "store" ? store.error
@@ -1048,7 +1074,13 @@ export default function App() {
         // 빠른 메모: 왼쪽 저장할 곳 + 오른쪽 이미 적은 기록 (고른 칸 강조)
         <div className="split">
           {listEl}
-          <article ref={recRef} className="preview md memo-rec" onClick={onRecClick} dangerouslySetInnerHTML={{ __html: memoHtml }} />
+          {memo.shot ? (
+            <div className="preview memo-side">
+              <figure className="shot"><img src={memo.shot.preview} alt="붙인 스크린샷" />
+                <figcaption>{memo.shot.source === "clip" ? "클립보드 이미지" : "스크린샷 파일 (저장하면 원본은 휴지통으로)"} · ⌘I 빼기</figcaption></figure>
+              <article ref={recRef} className="md memo-rec" onClick={onRecClick} dangerouslySetInnerHTML={{ __html: memoHtml }} />
+            </div>
+          ) : <article ref={recRef} className="preview md memo-rec" onClick={onRecClick} dangerouslySetInnerHTML={{ __html: memoHtml }} />}
         </div>
       ) : mode === "clip" ? (
         // 클립보드 기록: 왼쪽 목록 + 오른쪽 전체 내용

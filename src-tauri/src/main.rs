@@ -8,6 +8,7 @@ mod extensions;
 mod indexer;
 mod rag;
 mod search;
+mod shot;
 mod system;
 mod vault;
 mod wiki;
@@ -524,6 +525,23 @@ fn memo_restore(id: String, file: String, date: String, section: String, line: u
     else { wiki::restore_record(&note_dir(&app, &id)?, &file, line, &text) }
 }
 
+// 빠른 메모 스크린샷: 방금 찍은 것 (클립보드 이미지 또는 스크린샷 파일, 30분 이내)
+#[tauri::command]
+async fn shot_latest() -> Result<shot::Shot, String> {
+    tauri::async_runtime::spawn_blocking(shot::latest).await.map_err(|e| e.to_string())?
+}
+
+// 스크린샷을 메모할 노트 옆 attachments/에 "날짜-이름"으로 저장. id가 비면 오늘 Daily(03_Daily/attachments). 돌려주는 값: 파일 이름
+#[tauri::command]
+async fn shot_save(source: String, path: Option<String>, name: String, date: String, id: String, file: String, app: AppHandle) -> Result<String, String> {
+    let dir = if id.is_empty() {
+        PathBuf::from(config::load(&config_file(&app))?.vault_dir).join("03_Daily").join("attachments")
+    } else {
+        wiki::inside(&note_dir(&app, &id)?, &file)?.parent().ok_or("노트 폴더를 찾지 못했어요.")?.join("attachments")
+    };
+    tauri::async_runtime::spawn_blocking(move || shot::save(&source, path.as_deref(), &name, &date, &dir)).await.map_err(|e| e.to_string())?
+}
+
 // 빠른 메모: 오늘 Daily 노트 읽기 (이미 적은 메모 보기)
 #[tauri::command]
 fn memo_daily_read(date: String, app: AppHandle) -> String {
@@ -711,7 +729,7 @@ fn main() {
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, notes_embed_build, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, note_set_field, note_toggle_task, note_add_record, memo_daily, memo_daily_read, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
+            notes_load, note_set_field, note_toggle_task, note_add_record, memo_daily, memo_daily_read, shot_latest, shot_save, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
         .run(tauri::generate_context!())
         .expect("Baro 실행 실패");
