@@ -20,7 +20,7 @@ export type StoreEntry = { id: string; name: string; description: string; versio
 // 목록 밖의 화면: 텍스트 결과, 권한 안내
 export type View = { kind: "text"; title: string; text: string; error?: boolean } | { kind: "perm"; perm: string };
 // 화면(App)이 넘겨주는 동작들
-export type Ui = { ask: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
+export type Ui = { ask: (q: string) => void; askNotes: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openClip: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
 
 const isMac = navigator.userAgent.includes("Mac");
 let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, note_searches: [], error: null };
@@ -38,6 +38,15 @@ export async function copy(text: string) {
 }
 export async function pasteText(text: string) {
   await navigator.clipboard.writeText(text);
+  await invoke("paste");
+}
+// 비밀번호: "숨김" 표시를 붙여 복사 → 클립보드 기록에 남지 않음
+export async function copySecret(text: string) {
+  await invoke("copy_secret", { text });
+  await invoke("hide");
+}
+export async function pasteSecret(text: string) {
+  await invoke("copy_secret", { text });
   await invoke("paste");
 }
 
@@ -89,6 +98,15 @@ const COMMANDS: Cmd[] = [
   { id: "b-pin", title: "창 고정·해제", keys: "pin float always on top 고정 항상 위", glyph: "pin", run: async ui => ui.togglePin() },
   { id: "b-files", title: "파일 찾기 (Finder)", keys: "files finder find 파일 찾기 위치 폴더", glyph: "file", run: async ui => ui.openFiles() },
   { id: "b-memo", title: "빠른 메모", keys: "memo note 메모 기록 적기 daily 데일리 공부 기록", glyph: "memo", run: async ui => ui.openMemo() },
+  { id: "b-clip", title: "클립보드 기록", keys: "clipboard history 클립보드 기록 복사 붙여넣기 paste", glyph: "clip", run: async ui => ui.openClip() },
+  { id: "b-expand", title: "스니펫 자동 입력 켜기·끄기", keys: "snippet expand text expansion 스니펫 자동 입력 확장 치환 세미콜론", glyph: "snippet",
+    run: async ui => {
+      const on = !(await invoke<boolean>("snippet_expand_state"));
+      await invoke("snippet_expand_set", { on });
+      ui.show({ kind: "text", title: on ? "스니펫 자동 입력을 켰어요" : "스니펫 자동 입력을 껐어요",
+        text: on ? `어느 앱에서든 ;키워드를 치면 본문으로 바뀌어요 (영문 입력 상태에서).\n${config.snippets.map(s => `;${s.keyword} → ${s.name}`).join("\n")}\n\n스니펫은 Baro 설정(config.json)의 snippets에서 고쳐요.`
+          : "이제 ;키워드를 쳐도 바뀌지 않아요." });
+    } },
   { id: "b-graph", title: "노트 그래프", keys: "graph vault 그래프 전체 노트 연결 링크 obsidian 옵시디언", glyph: "graph", run: async ui => ui.openGraph() },
   { id: "b-center", title: "Baro 창 위치 초기화", keys: "center reset window position 가운데 위치 초기화 창", glyph: "center", run: () => invoke("set_placed", { on: false }) },
   { id: "b-hotkeys", title: "단축키 설정", keys: "hotkey shortcut keyboard 단축키", glyph: "keyboard", run: async ui => ui.openHotkeys() },
@@ -196,7 +214,9 @@ export function homeItems(ui: Ui): Item[] {
     ex("apps", "app", "app", "앱 실행", "앱 이름 입력 · 예: 사파리", "사파리"),
     go("files", "file", "cmd", "파일 찾기", "홈 · 외장 디스크에서 이름으로 찾고 Finder로 위치 보기", "열기", async () => ui.openFiles(), true),
     go("memo", "memo", "cmd", "빠른 메모", "오늘 Daily나 공부 중인 단계의 내 기록에 한 줄 적기", "열기", async () => ui.openMemo(), true),
+    go("clip", "clip", "cmd", "클립보드 기록", "복사했던 글을 다시 찾아 붙여넣기", "열기", async () => ui.openClip(), true),
     ex("calc", "calc", "calc", "계산기", "수식 입력 · 예: 12*3+4", "12*3+4"),
+    ex("notesAi", "notesAi", "ai", "내 노트에게 묻기", config.ai_ready ? "질문 입력 후 ⌘↵ · 내 Obsidian 노트에서 찾아 출처와 함께 답해요" : "설정에서 AI 연결 필요", "Tauri에서 링크를 기본 브라우저로 여는 방법"),
     ex("ai", "ai", "ai", "AI에게 묻기", config.ai_ready ? `질문 입력 후 Tab · ${config.ai_model}` : "설정에서 AI 연결 필요", "맥북 생산성 단축키 3개 추천해줘"),
     ex("window", "left", "cmd", "창 관리", "창 · 왼쪽/오른쪽 절반, 최대화", "창"),
     ex("links", "link", "link", "퀵링크", config.quicklinks.map(l => l.keyword).join(", ") + " + 검색어", config.quicklinks[0] ? `${config.quicklinks[0].keyword} ` : "yt "),
@@ -212,12 +232,20 @@ export function homeItems(ui: Ui): Item[] {
   ];
 }
 
-export function aiItem(q: string, ask: (q: string) => void): Item {
+export function aiItem(q: string, ask: (q: string) => void, askNotes?: (q: string) => void): Item {
   return config.ai_ready
     ? { id: "ai", title: `AI에게 묻기: ${q}`, subtitle: `${config.ai_model} · Tab`, kind: "ai", glyph: "ai",
-        actions: [{ title: "AI에게 묻기", keep: true, run: async () => ask(q) }] }
+        actions: [{ title: "AI에게 묻기", keep: true, run: async () => ask(q) },
+          ...(askNotes ? [{ title: "내 노트에서 찾아 묻기", shortcut: "⌘↵", keep: true, run: async () => askNotes(q) }] : [])] }
     : { id: "ai", title: "AI에게 묻기 (API 키 필요)", subtitle: "설정 열기", kind: "ai", glyph: "ai",
         actions: [{ title: "설정 파일 열기", run: () => invoke("open_config") }] };
+}
+
+// 내 노트에게 묻기: Vault에서 관련 노트를 찾아 그 발췌로 답함 (출처 노트 표시)
+export function notesAiItem(q: string, askNotes: (q: string) => void): Item | null {
+  if (!config.ai_ready) return null;
+  return { id: "ai-notes", title: `내 노트에게 묻기: ${q}`, subtitle: `Obsidian 노트에서 찾아 답해요 · ⌘↵`, kind: "ai", glyph: "notesAi",
+    actions: [{ title: "내 노트에게 묻기", keep: true, run: async () => askNotes(q) }] };
 }
 
 // 빠른 결과(top) / 마지막에 붙는 항목(bottom). 파일 검색 결과는 그 사이에 따로 들어감
@@ -247,7 +275,7 @@ export async function query(q: string, ui: Ui): Promise<{ top: Item[]; bottom: I
     { title: "Google에서 검색", run: () => invoke("open_url", { url }) },
     { title: "검색어 복사", run: () => copy(q) },
     { title: "검색 URL 복사", run: () => copy(url) },
-  ] }, aiItem(q, ui.ask)];
+  ] }, aiItem(q, ui.ask, ui.askNotes), ...[notesAiItem(q, ui.askNotes)].filter((x): x is Item => !!x)];
   return { top, bottom };
 }
 

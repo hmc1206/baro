@@ -28,7 +28,7 @@ pub fn need_ax() -> Result<(), String> { if ax_trusted() { Ok(()) } else { Err("
 
 // 시스템 설정의 해당 권한 화면 열기
 pub fn open_settings(kind: &str) -> Result<(), String> {
-    let pane = match kind { "automation" => "Privacy_Automation", _ => "Privacy_Accessibility" };
+    let pane = match kind { "automation" => "Privacy_Automation", "input" => "Privacy_ListenEvent", _ => "Privacy_Accessibility" };
     Command::new("open").arg(format!("x-apple.systempreferences:com.apple.preference.security?{pane}"))
         .spawn().map(|_| ()).map_err(|e| e.to_string())
 }

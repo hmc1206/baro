@@ -14,6 +14,10 @@ Tauri 2(Rust) + React/TypeScript로 만들었어요.
 | 노트 검색 | Obsidian 폴더 + 방식 + 단축키를 Baro 화면에서 만들어요. 방식: 명령어 사전 · 일반 노트 · 스니펫 모음 · 비밀번호 모음 |
 | 노트 그래프 | Vault 전체의 `[[링크]]` 그래프. 휠 확대, 클릭 미리보기, 더블클릭 Obsidian 열기, ⌘F Finder에서 보기 |
 | 비밀번호 모음 | 노트 머리말의 `password`를 가려서 보여 줘요(⌘R 보기). 복사·붙여넣기, ⌘E 수정, 새 노트 추가 |
+| 클립보드 기록 | 복사한 글 최근 200개를 검색해 다시 붙여넣기(↵), ⌘C 복사, ⌘N 빠른 메모로, ⌘D 지우기. 비밀번호 관리자가 복사한 것, 키·토큰처럼 보이는 글은 저장하지 않아요 |
+| 내 노트에게 묻기 | 질문 입력 후 ⌘↵. Vault에서 관련 노트를 찾아 그 내용으로 답하고 출처 노트를 보여 줘요. 비밀번호 노트는 넘기지 않고, 본문의 비밀번호 같은 글자는 가려요 |
+| 개념 노트 만들기 | 노트 미리보기 아래 "아직 없는 노트"의 `+ 이름`을 누르면 틀에 맞춘 노트를 만들어 Obsidian에서 열어요 (같은 이름이 있으면 그 노트를 열어요) |
+| 스니펫 자동 입력 | 켜면 어느 앱에서든 `;키워드` → 스니펫 본문 (영문 입력 상태, 입력 모니터링 권한 필요, 기본 꺼짐) |
 | AI에게 묻기 | Tab. 기본은 로컬 Ollama, Claude API로 바꿀 수 있어요. ⌘S로 답변을 Obsidian 노트로 저장 |
 | 퀵링크·스니펫 | `yt 검색어`, `today` 등. 검색어 없는 퀵링크는 전역 단축키로 바로 열기 |
 | 창 관리 | `창` → 왼쪽/오른쪽 절반, 최대화, 가운데 (손쉬운 사용 권한 필요) |
@@ -54,7 +58,9 @@ cp -R src-tauri/target/release/bundle/macos/Baro.app /Applications/
 | `ai_save_dir` | AI 답변 저장 폴더 (기본 Vault의 `00_Inbox/AI`) |
 | `note_searches` | 노트 검색 목록 `{id, name, dir, kind}` — 화면에서 만들고 고칠 수 있어요 |
 | `quicklinks`, `snippets` | 퀵링크(`{query}` 자리표시)와 스니펫 |
-| `hotkeys` | 전역 단축키 (`baro`, `ai`, `store`, `graph`, `files`, `note:<id>`, `link:<keyword>`) |
+| `hotkeys` | 전역 단축키 (`baro`, `ai`, `store`, `graph`, `files`, `memo`, `clipboard`, `note:<id>`, `link:<keyword>`) |
+| `clipboard_history` | 클립보드 기록 (기본 켜짐). 기록은 같은 폴더의 `clipboard.json`(나만 읽기 권한) |
+| `snippet_expand` | 스니펫 자동 입력 (기본 꺼짐) |
 | `store_url` | 확장 스토어 주소 (`index.json`이 있는 폴더, `file://` 또는 `https://`) |
 
 ## 확장 만들기
@@ -75,7 +81,10 @@ cp -R src-tauri/target/release/bundle/macos/Baro.app /Applications/
 | `src-tauri/src/main.rs` | Tauri 명령, 전역 단축키, 창 표시·숨김·고정 |
 | `src-tauri/src/config.rs` | `config.json` 읽기/쓰기와 기본값 |
 | `src-tauri/src/indexer.rs`, `search.rs` | 앱 목록·아이콘·한글 이름, 퍼지 검색 |
-| `src-tauri/src/wiki.rs` | 노트 읽기, AI 답변 저장, 머리말 수정·새 노트 (노트 검색 폴더 안 `.md`만) |
+| `src-tauri/src/wiki.rs` | 노트 읽기, AI 답변 저장, 머리말 수정·새 노트·개념 노트 |
+| `src-tauri/src/clip.rs` | 클립보드 기록 (변경 감시, 비밀 제외) |
+| `src-tauri/src/rag.rs` | 내 노트에게 묻기 (노트 검색·발췌·비밀번호 가리기) |
+| `src-tauri/src/expand.rs` | 스니펫 자동 입력 (키 입력 감시) |
 | `src-tauri/src/system.rs` | 창 배치, 시스템 명령, `mdfind` 파일 검색, 권한 확인 |
 | `src-tauri/src/ai.rs` | Ollama / Claude 스트리밍 |
 | `src-tauri/src/extensions.rs` | 확장 설치·실행·삭제 |

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
 import {
-  query, fileItems, storeItems, homeItems, aiItem, iconFor, loadConfig, getConfig, copy, pasteText,
+  query, fileItems, storeItems, homeItems, aiItem, notesAiItem, iconFor, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry,
 } from "./commands";
 import { loadDocs, rank, byCategory, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
@@ -38,6 +38,13 @@ const PERMS: Record<string, { title: string; body: string }> = {
       "처음 실행할 때 macOS가 \"Baro가 Finder를 제어하려고 합니다\"라고 물으면 허용을 누르세요. 이미 거절했다면 " +
       "Enter를 눌러 시스템 설정 → 개인정보 보호 및 보안 → 자동화에서 Baro 아래 항목을 켜 주세요.",
   },
+  input: {
+    title: "입력 모니터링 권한이 필요해요",
+    body: "스니펫 자동 입력은 어느 앱에서든 ;키워드를 알아채야 해서 키 입력을 읽는 권한이 필요해요. " +
+      "입력한 글자는 저장하지 않고 마지막 40글자만 잠깐 비교하며, 비밀번호 칸에서는 macOS가 아예 넘겨주지 않아요.\n\n" +
+      "Enter를 누르면 시스템 설정 → 개인정보 보호 및 보안 → 입력 모니터링 화면이 열려요. 목록에서 Baro를 켠 뒤 " +
+      "\"스니펫 자동 입력 켜기\"를 다시 실행하세요. (켠 뒤에도 안 되면 Baro를 껐다 켜 주세요.)",
+  },
   ok: {
     title: "필요한 권한이 모두 있어요",
     body: "손쉬운 사용: 허용됨\n자동화: 휴지통 비우기·다크 모드를 처음 쓸 때 macOS가 따로 물어봐요.",
@@ -46,7 +53,7 @@ const PERMS: Record<string, { title: string; body: string }> = {
 
 // 단축키를 지정할 수 있는 기능: 고정 기능(Rust config.rs의 HOTKEY_ACTIONS) + 사용자가 만든 노트 검색
 const hotkeyLabels = (): [string, string][] => [
-  ["baro", "Baro 열기"], ["ai", "AI에게 묻기"], ["store", "확장 스토어"], ["graph", "노트 그래프 (전체)"], ["files", "파일 찾기 (Finder)"], ["memo", "빠른 메모"],
+  ["baro", "Baro 열기"], ["ai", "AI에게 묻기"], ["store", "확장 스토어"], ["graph", "노트 그래프 (전체)"], ["files", "파일 찾기 (Finder)"], ["memo", "빠른 메모"], ["clipboard", "클립보드 기록"],
   ...getConfig().note_searches.map(n => [`note:${n.id}`, n.name] as [string, string]),
   // 검색어 없는 퀵링크 (예: 아이디어 캔버스 열기). 누르면 Baro 창 없이 바로 열림
   ...getConfig().quicklinks.filter(l => !l.url.includes("{query}")).map(l => [`link:${l.keyword}`, l.name] as [string, string]),
@@ -68,7 +75,9 @@ function accelOf(e: KeyboardEvent) {
   return [...mods, e.code].join("+");
 }
 
-type Ai = { id: number; q: string; text: string; busy: boolean; error: string | null; saved?: string; saveError?: string };
+// notes: 내 노트에게 묻기 (sources = 찾은 노트, 답변 아래 출처로 표시)
+type Source = { title: string; file: string };
+type Ai = { id: number; q: string; text: string; busy: boolean; error: string | null; saved?: string; saveError?: string; notes?: boolean; sources?: Source[] };
 type Store = { entries: StoreEntry[]; loading: boolean; error: string | null };
 type Notes = { search: NoteSearch | null; docs: Doc[]; loading: boolean; error: string | null };
 // 노트 검색 추가·수정 화면의 입력값
@@ -117,7 +126,15 @@ function newPwNote(last: Doc | undefined, name: string, title: string, password:
   return `${lines.join("\n")}\n\n# ${title || name}\n\n## 풀이\n- \n\n## 배운 점\n- \n\n## 관련\n${links}\n`;
 }
 // 화면 종류: null(기본 검색) | 파일 찾기 | 확장 스토어 | 노트 검색 | 예시 고르기 | 단축키 설정 | AI 질문 | 노트 검색 관리 | 노트 검색 추가·수정
-type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit" | "files" | "memo";
+type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit" | "files" | "memo" | "clip";
+// 클립보드 기록 (Rust clip.rs): at = 복사한 시각(ms), app = 그때 앞에 있던 앱
+type Clip = { text: string; at: number; app: string };
+const dayOf = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+function clipDay(ms: number) {
+  const t = dayOf(Date.now()), y = dayOf(Date.now() - 86400000), d = dayOf(ms);
+  return d === t ? "오늘" : d === y ? "어제" : d;
+}
+const clipTime = (ms: number) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 // 빠른 메모: 기록할 커리큘럼 단계(없으면 Daily만), 어디서 왔는지(Esc로 돌아갈 곳), 결과 문구
 type Stage = { search: NoteSearch; doc: Doc };
 type Memo = { stage: Stage | null; from: Mode; saved: string | null; error: string | null; finding?: boolean; daily?: string; dailyDate?: string };
@@ -180,6 +197,7 @@ export default function App() {
   const [graph, setGraph] = useState(false); // 노트 검색을 그래프로 보기 (⌘G)
   const [pick, setPick] = useState<Doc | null>(null); // 그래프에서 클릭한 노트
   const [local, setLocal] = useState(0); // 로컬 그래프: 0 끔, 1·2 = 고른 노트에서 몇 단계까지 (⌘L)
+  const [clips, setClips] = useState<{ list: Clip[]; enabled: boolean }>({ list: [], enabled: true });
   const [hk, setHk] = useState<Hk>({ keys: {}, recording: null, error: null });
   const aiSeq = useRef(0);
   const input = useRef<HTMLInputElement & HTMLTextAreaElement>(null); // 메모 화면에서는 여러 줄 입력칸(textarea)
@@ -196,6 +214,25 @@ export default function App() {
     invoke("ask_ai", { id, prompt: question })
       .catch(e => setAi(a => a && a.id === id ? { ...a, busy: false, error: String(e) } : a));
   };
+  const askNotes = (question: string) => {
+    const id = ++aiSeq.current;
+    setView(null);
+    setAi({ id, q: question, text: "", busy: true, error: null, notes: true, sources: [] });
+    setMenu(false);
+    invoke<Source[]>("ask_notes", { id, question })
+      .then(sources => setAi(a => a && a.id === id ? { ...a, sources } : a))
+      .catch(e => setAi(a => a && a.id === id ? { ...a, busy: false, error: String(e) } : a));
+  };
+  // 아직 없는 [[링크]] → 개념 노트 만들기 (Vault에 같은 이름이 있으면 그 노트를 엶). 만든 뒤 Obsidian에서 열기
+  const createConcept = async (src: Doc, name: string) => {
+    try {
+      const [path, made] = await invoke<[string, boolean]>("concept_create", { src: src.file, name, date: today() });
+      docCache.delete("__vault");
+      if (made) await reloadDocs().catch(() => {});
+      await openObsidian(path);
+    } catch (e) { failNote("개념 노트를 만들지 못했어요")(e); }
+  };
+  const openObsidian = (file: string) => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(file)}` });
   // AI 답변을 Obsidian 노트로 저장 (⌘S). 날짜는 내 Mac의 오늘 날짜
   const saveAi = async () => {
     if (!ai || ai.busy || !ai.text.trim() || ai.saved) return;
@@ -203,7 +240,8 @@ export default function App() {
     const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     const id = ai.id;
     try {
-      const saved = await invoke<string>("save_ai", { date, question: ai.q, answer: ai.text });
+      const src = ai.sources?.length ? `\n\n## 출처 노트\n${ai.sources.map((s, i) => `${i + 1}. [[${s.title}]]`).join("\n")}` : "";
+      const saved = await invoke<string>("save_ai", { date, question: ai.q, answer: ai.text + src });
       setAi(a => a && a.id === id ? { ...a, saved, saveError: undefined } : a);
       loadConfig().then(() => setRev(r => r + 1));
     } catch (e) { setAi(a => a && a.id === id ? { ...a, saveError: String(e) } : a); }
@@ -258,6 +296,33 @@ export default function App() {
     if (!task || boxes.length !== curDoc.tasks.length) return;
     invoke("note_toggle_task", { id: notes.search.id, file: curDoc.file, index: i, text: task.text, done: !task.done })
       .then(reloadDocs).catch(failNote("체크하지 못했어요"));
+  };
+  const loadClips = () => Promise.all([invoke<Clip[]>("clip_list"), invoke<boolean>("clip_enabled")])
+    .then(([list, enabled]) => setClips({ list, enabled })).catch(() => {});
+  const openClip = () => { enter("clip"); loadClips(); };
+  // 클립보드 기록 목록: 검색어가 있으면 글 안에서 찾기. 맨 끝에 기록 끄기·모두 지우기
+  const clipItems = (): Item[] => {
+    const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const shown = clips.list.filter(c => words.every(w => c.text.toLowerCase().includes(w))).slice(0, 100);
+    const rows: Item[] = shown.map(c => ({
+      id: `clip-${c.at}`, title: c.text.trim().split("\n")[0].slice(0, 120), kind: "snippet", glyph: "clip", section: clipDay(c.at),
+      subtitle: [clipTime(c.at), c.app, c.text.includes("\n") ? `${c.text.split("\n").length}줄` : ""].filter(Boolean).join(" · "),
+      actions: [
+        { title: "앞 앱에 붙여넣기", run: () => pasteText(c.text) },
+        { title: "복사", shortcut: "⌘C", run: () => copy(c.text) },
+        { title: "빠른 메모로 보내기", shortcut: "⌘N", keep: true, run: async () => { openMemo(undefined, "clip"); setQ(c.text); } },
+        { title: "이 기록 지우기", shortcut: "⌘D", keep: true, run: async () => { await invoke("clip_remove", { at: c.at, text: c.text }); await loadClips(); } },
+      ],
+    }));
+    if (q.trim()) return rows;
+    return [...rows,
+      { id: "clip-toggle", title: clips.enabled ? "클립보드 기록 멈추기" : "클립보드 기록 다시 켜기", kind: "cmd", glyph: clips.enabled ? "pause" : "clip", section: "설정",
+        subtitle: clips.enabled ? "멈춘 동안 복사한 글은 저장하지 않아요" : "지금은 기록하지 않고 있어요",
+        actions: [{ title: clips.enabled ? "멈추기" : "켜기", keep: true, run: async () => { await invoke("clip_set_enabled", { on: !clips.enabled }); await loadClips(); } }] },
+      ...(clips.list.length ? [{ id: "clip-clear", title: "모두 지우기", kind: "cmd" as const, glyph: "trash", section: "설정", subtitle: `기록 ${clips.list.length}개`,
+        actions: [{ title: "모두 지우기", keep: true, confirm: "클립보드 기록을 모두 지울까요? 되돌릴 수 없어요. Enter를 한 번 더 누르세요.",
+          run: async () => { await invoke("clip_clear"); await loadClips(); } }] }] : []),
+    ];
   };
   const openFiles = () => { setFound({ items: [], loading: false }); enter("files"); };
   // 빠른 메모 열기. stage가 없으면 커리큘럼에서 "진행 중"(없으면 아직 안 끝난 첫) 단계를 찾음 (목차 노트 제외)
@@ -407,7 +472,7 @@ export default function App() {
   };
   const openExamples = (doc: Doc) => { setExDoc({ doc, prevQ: q }); setQ(""); setMode("examples"); };
   const ui: Ui = {
-    ask, openStore, openNotes, openGraph, openFiles, openMemo: () => openMemo(), openNoteManager, openHotkeys, togglePin,
+    ask, askNotes, openStore, openNotes, openGraph, openFiles, openMemo: () => openMemo(), openClip, openNoteManager, openHotkeys, togglePin,
     show: v => { setAi(null); setView(v); },
     setQuery: text => { setQ(text); input.current?.focus(); },
   };
@@ -428,8 +493,8 @@ export default function App() {
       return { id: `n-${d.file}`, title: d.name, kind: "wiki", glyph: "lock", section: q.trim() ? undefined : d.category,
         subtitle: p ? (reveal ? p : MASK) : d.meta.key_file ? `키 파일 ${d.meta.key_file}` : "비밀번호 없음",
         actions: [
-          ...(p ? [{ title: "비밀번호 복사", run: () => copy(p) },
-            { title: "앞 앱에 비밀번호 붙여넣기", shortcut: "⌘↵", run: () => pasteText(p) }] : []),
+          ...(p ? [{ title: "비밀번호 복사", run: () => copySecret(p) },
+            { title: "앞 앱에 비밀번호 붙여넣기", shortcut: "⌘↵", run: () => pasteSecret(p) }] : []),
           { title: "비밀번호 수정", shortcut: "⌘E", keep: true, run: async () => openPw(d) },
           ...(ssh ? [{ title: "접속 명령 복사", run: () => copy(ssh) }, { title: "접속 명령 붙여넣기", run: () => pasteText(ssh) }] : []),
           obsidian, finder,
@@ -514,13 +579,17 @@ export default function App() {
     : mode === "noteEdit" ? []
     : mode === "hotkeys" ? hotkeyItems()
     : mode === "store" ? storeItems(q, store.entries, () => setRev(r => r + 1), ui)
-    : mode === "ask" ? (q.trim() ? [aiItem(q.trim(), ask)] : [])
+    : mode === "ask" ? (q.trim() ? [aiItem(q.trim(), ask, askNotes), ...[notesAiItem(q.trim(), askNotes)].filter((x): x is Item => !!x)] : [])
     : mode === "files" ? found.items
     : mode === "memo" ? memoItems()
+    : mode === "clip" ? clipItems()
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
   const graphOn = mode === "note" && graph;
+  const curClip = mode === "clip" ? clips.list.find(c => `clip-${c.at}` === items[sel]?.id) : undefined;
   const curDoc = mode === "note" ? (graphOn && pick ? pick : noteList[sel]) : undefined;
-  const links = useMemo(() => graphOn ? linkInfo(notes.docs) : null, [graphOn, notes.docs]); // 미리보기: 가는·오는 링크
+  // 미리보기: 가는·오는 링크, 아직 없는 링크 (비밀번호 모음 제외)
+  const linksOn = mode === "note" && notes.search?.kind !== "passwords";
+  const links = useMemo(() => linksOn ? linkInfo(notes.docs) : null, [linksOn, notes.docs]);
   const curLinks = curDoc && links?.get(curDoc.file);
   const graphMatches = useMemo(() => graphOn && q.trim() ? new Set(noteList.map(d => d.file)) : null, [graphOn, q, noteList]);
   // 빠른 메모 오른쪽: 단계의 "내 기록" 세 칸과 오늘 Daily 메모 (칸마다 최근 6개)
@@ -578,6 +647,7 @@ export default function App() {
     else if (action === "graph") openGraph();
     else if (action === "files") openFiles();
     else if (action === "memo") openMemo();
+    else if (action === "clipboard") openClip();
     else if (mode !== null && mode !== "store" && mode !== "noteEdit") enter(null);
     input.current?.focus(); input.current?.select();
   };
@@ -737,7 +807,8 @@ export default function App() {
       else if (e.metaKey && e.code === "KeyS") { e.preventDefault(); saveAi(); }
       else if (e.metaKey && e.code === "KeyO" && ai.saved) { e.preventDefault(); invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(ai.saved)}` }); }
       else if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); navigator.clipboard.writeText(ai.text); }
-      else if (e.key === "Enter") { e.preventDefault(); if (q.trim() && !ai.busy) ask(q.trim()); }
+      else if (e.key === "Enter" && e.metaKey) { e.preventDefault(); if (q.trim() && !ai.busy) askNotes(q.trim()); }
+      else if (e.key === "Enter") { e.preventDefault(); if (q.trim() && !ai.busy) (ai.notes ? askNotes : ask)(q.trim()); }
       return;
     }
     // ⌘R: 비밀번호 보이기·가리기
@@ -754,6 +825,12 @@ export default function App() {
       const typed = input.current && input.current.selectionStart !== input.current.selectionEnd;
       const a = sc === "⌘C" && typed ? undefined : cur.actions.find(x => x.shortcut === sc); // 입력창에서 글자를 골랐으면 ⌘C는 그 글자 복사
       if (a) { e.preventDefault(); run(a); return; }
+      // ⌘↵: 고른 항목에 ⌘↵ 동작이 없으면 기본 검색·AI 화면에서는 "내 노트에게 묻기", 그 밖에는 아무것도 안 함 (Enter 동작으로 넘어가지 않게)
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if ((mode === null || mode === "ask") && q.trim()) askNotes(q.trim());
+        return;
+      }
     }
     const n = menu ? cur?.actions.length ?? 0 : items.length;
     const move = menu ? setAsel : setSel;
@@ -781,7 +858,7 @@ export default function App() {
     : cur?.actions.find((a, i) => i > 0 && a.shortcut); // 기본 동작과 겹치면 하단에 두 번 보이지 않게
   const footerKeys: [string, string[]][] = view
     ? [[view.kind === "perm" ? (view.perm === "ok" ? "" : "시스템 설정 열기") : "결과 복사", ["↵"]], ["돌아가기", ["esc"]]]
-    : ai ? [["답변 복사", ["⇧", "↵"]], ai.saved ? ["Obsidian에서 열기", ["⌘", "O"]] : ["Obsidian에 저장", ["⌘", "S"]], ["돌아가기", ["esc"]]]
+    : ai ? [["답변 복사", ["⇧", "↵"]], ...(ai.notes ? [] : [["노트에서 다시 묻기", ["⌘", "↵"]] as [string, string[]]]), ai.saved ? ["Obsidian에서 열기", ["⌘", "O"]] : ["Obsidian에 저장", ["⌘", "S"]], ["돌아가기", ["esc"]]]
     : hk.recording ? [["취소", ["esc"]]]
     : cur ? [[cur.actions[0].title, ["↵"]], ...(quick ? [[quick.title, [...quick.shortcut!]] as [string, string[]]] : []),
       ...(mode === "note" && notes.search?.kind === "passwords" ? [[reveal ? "가리기" : "보기", ["⌘", "R"]] as [string, string[]]] : []),
@@ -793,13 +870,15 @@ export default function App() {
     : mode === "noteManage" ? "노트 검색 관리"
     : mode === "examples" ? `${exDoc?.doc.name ?? ""} 예시 검색`
     : mode === "hotkeys" ? "단축키 설정"
-    : mode === "ask" ? "AI에게 물어보기 (Enter)"
+    : mode === "ask" ? "AI에게 물어보기 (Enter · ⌘↵ 내 노트에서 찾아 묻기)"
     : mode === "files" ? "파일 이름 (홈 · 외장 디스크)"
+    : mode === "clip" ? "복사했던 글 검색"
     : mode === "memo" ? "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 · ! 막힌 점 · $ 명령어"
     : "앱, 파일, 명령, 계산, AI에게 묻기";
   const header = home ? "Baro로 할 수 있는 일"
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`
     : mode === "files" ? (found.loading ? "찾는 중…" : q.trim() ? `파일 ${found.items.length}개` : "파일 이름을 입력하세요 · Enter로 Finder에서 보기")
+    : mode === "clip" ? (q.trim() ? `찾은 기록 ${items.filter(i => i.id.startsWith("clip-") && !["clip-toggle", "clip-clear"].includes(i.id)).length}개` : clips.enabled ? null : "기록을 멈춘 상태예요")
     : mode === "memo" ? (memo.saved ? `✓ ${memo.saved}` : memo.finding ? "공부 중인 단계 찾는 중…" : memo.stage ? `지금 단계: ${memo.stage.doc.name}` : "공부 중인 커리큘럼 단계가 없어 Daily에 적어요")
     : mode === "note" && (notes.loading || q.trim()) ? (notes.loading ? "노트 불러오는 중…" : `검색 결과 ${noteList.length}개`)
     : null;
@@ -808,7 +887,17 @@ export default function App() {
     : mode === "hotkeys" ? hk.error
     : mode === "files" ? (q.trim() && !found.loading && !found.items.length ? "일치하는 파일이 없어요." : null)
     : mode === "memo" ? memo.error
+    : mode === "clip" ? (!clips.list.length ? "아직 기록이 없어요. 글을 복사하면 여기에 쌓여요 (비밀번호·키처럼 보이는 글은 빼요)." : q.trim() && !items.length ? "일치하는 기록이 없어요." : null)
     : mode === null && q && !items.length ? "결과가 없습니다. 다른 이름으로 검색해 보세요." : null;
+
+  // 아직 노트가 없는 [[링크]]: 누르면 개념 노트를 만들어 Obsidian에서 열기
+  const missingEl = curDoc && curLinks?.missing.length ? (
+    <section>
+      <div className="links-head">{notes.search?.id === "__vault" ? "아직 없는 노트" : "이 폴더에 없는 노트"} {curLinks.missing.length} · 누르면 {notes.search?.id === "__vault" ? "개념 노트를 만들어요" : "Vault에서 찾아 열고, 없으면 개념 노트를 만들어요"}</div>
+      <div className="links-list">{curLinks.missing.map(n =>
+        <button key={n} className="link-item missing" title={`${n}.md 만들기`} onClick={() => createConcept(curDoc, n)}>+ {n}</button>)}</div>
+    </section>
+  ) : null;
 
   const listEl = (
     // 목록을 클릭해도 입력창 포커스를 유지
@@ -848,9 +937,17 @@ export default function App() {
         </section>
       ) : ai ? (
         <section className="ai-view">
-          <div className="ai-q"><span className="icon glyph ai">{(() => { const S = ICONS.ai; return <S size={15} strokeWidth={2.2} />; })()}</span>{ai.q}</div>
+          <div className="ai-q"><span className="icon glyph ai">{(() => { const S = ICONS[ai.notes ? "notesAi" : "ai"]; return <S size={15} strokeWidth={2.2} />; })()}</span>{ai.q}</div>
           {ai.error ? <p className="ai-err">{ai.error}</p>
             : <p className="ai-a">{ai.text}{ai.busy && <span className="caret" />}</p>}
+          {ai.notes && !!ai.sources?.length && (
+            <div className="links ai-sources">
+              <div className="links-head">찾은 노트 {ai.sources.length} · 클릭하면 Obsidian에서 열기</div>
+              <div className="links-list">{ai.sources.map((s, i) =>
+                <button key={s.file} className="link-item" title={s.file} onClick={() => openObsidian(s.file)}>[{i + 1}] {s.title}</button>)}</div>
+            </div>
+          )}
+          {ai.notes && ai.busy && !ai.sources?.length && !ai.text && <p className="ai-saved">노트에서 찾는 중…</p>}
           {ai.saved && <p className="ai-saved">저장했어요: {ai.saved.replace(/^.*\/MyBrain\//, "")}</p>}
           {ai.saveError && <p className="ai-err">{ai.saveError}</p>}
         </section>
@@ -933,6 +1030,7 @@ export default function App() {
                       : <div className="links-none">없음</div>}
                   </section>
                 ))}
+                {missingEl}
               </div>
             )}
           </div>
@@ -943,12 +1041,26 @@ export default function App() {
           {listEl}
           <article ref={recRef} className="preview md memo-rec" onClick={onRecClick} dangerouslySetInnerHTML={{ __html: memoHtml }} />
         </div>
-      ) : mode === "note" ? (
-        // 노트 검색: 왼쪽 목록 + 오른쪽 노트 미리보기
+      ) : mode === "clip" ? (
+        // 클립보드 기록: 왼쪽 목록 + 오른쪽 전체 내용
         <div className="split">
           {listEl}
-          <article className={`preview md${notes.search?.kind === "curriculum" ? " tasks" : ""}`} onClick={onPreviewClick}
-            dangerouslySetInnerHTML={{ __html: previewHtml }} />
+          <article className="preview clip-view">
+            {curClip ? <>
+              <pre>{curClip.text}</pre>
+              <p className="clip-meta">{clipDay(curClip.at)} {clipTime(curClip.at)}{curClip.app && ` · ${curClip.app}`} · {curClip.text.length.toLocaleString()}자</p>
+            </> : <p className="clip-meta">{cur?.subtitle}</p>}
+          </article>
+        </div>
+      ) : mode === "note" ? (
+        // 노트 검색: 왼쪽 목록 + 오른쪽 노트 미리보기 (+ 아직 없는 링크로 개념 노트 만들기)
+        <div className="split">
+          {listEl}
+          <div className="preview" key={curDoc?.file}>
+            <article className={`md${notes.search?.kind === "curriculum" ? " tasks" : ""}`} onClick={onPreviewClick}
+              dangerouslySetInnerHTML={{ __html: previewHtml }} />
+            {missingEl && <div className="links">{missingEl}</div>}
+          </div>
         </div>
       ) : listEl}
       {menu && cur && !ai && !view && (

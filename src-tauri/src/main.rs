@@ -1,8 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod ai;
+mod clip;
 mod config;
+mod expand;
 mod extensions;
 mod indexer;
+mod rag;
 mod search;
 mod system;
 mod wiki;
@@ -172,7 +175,28 @@ async fn files_wide(q: String) -> Vec<String> {
 }
 
 #[tauri::command]
-fn get_config(app: AppHandle) -> config::PublicConfig { config::public(&config_file(&app)) }
+fn get_config(app: AppHandle) -> config::PublicConfig {
+    // 스니펫이 바뀌었을 수 있으니 자동 확장 목록도 새로
+    if let Ok(c) = config::load(&config_file(&app)) { expand::set_snippets(&c.snippets); }
+    config::public(&config_file(&app))
+}
+
+// 스니펫 자동 확장 켜기·끄기. 켰는데 권한이 없으면 "PERM:input" (macOS가 권한 창을 띄움)
+#[tauri::command]
+async fn snippet_expand_set(on: bool, app: AppHandle) -> Result<bool, String> {
+    let f = config_file(&app);
+    let mut c = config::load(&f)?;
+    c.snippet_expand = on;
+    config::save(&f, &c)?;
+    expand::set_snippets(&c.snippets);
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || { let _ = tx.send(expand::enable(on)); }).map_err(|e| e.to_string())?;
+    let running = rx.recv().map_err(|e| e.to_string())?;
+    if on && !running { return Err("PERM:input".into()); }
+    Ok(running)
+}
+#[tauri::command]
+fn snippet_expand_state(app: AppHandle) -> bool { config::load(&config_file(&app)).map(|c| c.snippet_expand).unwrap_or(false) }
 
 // 설정 파일을 기본 텍스트 편집기로 열기
 #[tauri::command]
@@ -203,6 +227,28 @@ async fn paste(app: AppHandle) -> Result<(), String> {
     dismiss(&app);
     system::paste()
 }
+
+// 클립보드 기록
+#[tauri::command]
+fn clip_list() -> Vec<clip::Clip> { clip::list() }
+#[tauri::command]
+fn clip_remove(at: i64, text: String) { clip::remove(at, &text) }
+#[tauri::command]
+fn clip_clear() { clip::clear() }
+#[tauri::command]
+fn clip_enabled() -> bool { clip::ENABLED.load(std::sync::atomic::Ordering::Relaxed) }
+#[tauri::command]
+fn clip_set_enabled(on: bool, app: AppHandle) -> Result<(), String> {
+    let f = config_file(&app);
+    let mut c = config::load(&f)?;
+    c.clipboard_history = on;
+    config::save(&f, &c)?;
+    clip::ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+// 비밀번호 복사: "숨김" 표시를 붙여 클립보드 기록(Baro·다른 앱)에 남지 않게
+#[tauri::command]
+fn copy_secret(text: String) -> Result<(), String> { clip::copy_secret(&text) }
 
 #[tauri::command]
 fn permissions() -> serde_json::Value { serde_json::json!({ "accessibility": system::ax_trusted() }) }
@@ -263,6 +309,25 @@ async fn ask_ai(id: u32, prompt: String, app: AppHandle) -> Result<(), String> {
 }
 
 // AI 답변을 Obsidian 노트로 저장. 저장 폴더를 보는 노트 검색이 없으면 "AI 답변" 노트 검색을 만들어 다시 찾을 수 있게 함
+// 내 노트에게 묻기: 관련 노트를 찾아 발췌와 함께 AI에 질문. 찾은 노트(출처)를 바로 돌려주고 답변은 스트리밍
+#[tauri::command]
+async fn ask_notes(id: u32, question: String, app: AppHandle) -> Result<Vec<rag::Source>, String> {
+    let c = config::load(&config_file(&app))?;
+    if c.ai_provider == "claude" && c.anthropic_api_key.trim().is_empty() {
+        return Err("설정 파일에 anthropic_api_key를 넣거나 ai_provider를 \"ollama\"로 바꿔 주세요.".into());
+    }
+    let vault = std::path::PathBuf::from(&c.vault_dir);
+    if !vault.is_dir() { return Err(format!("Vault를 읽을 수 없어요. 외장 디스크 연결을 확인하세요.\n{}", c.vault_dir)); }
+    // 비밀번호 모음 폴더는 통째로 제외
+    let skip: Vec<String> = c.note_searches.iter().filter(|n| n.kind == "passwords").map(|n| n.dir.clone()).collect();
+    let q = question.clone();
+    let hits = tauri::async_runtime::spawn_blocking(move || rag::search(&vault, &skip, &q, 5)).await.map_err(|e| e.to_string())?;
+    if hits.is_empty() { return Err("질문과 관련된 노트를 찾지 못했어요. 노트에 나올 만한 단어로 물어보세요.".into()); }
+    let sources = hits.iter().map(|h| rag::Source { title: h.title.clone(), file: h.file.clone() }).collect();
+    tauri::async_runtime::spawn(ai::ask(app, c, id, rag::prompt(&question, &hits)));
+    Ok(sources)
+}
+
 #[tauri::command]
 fn save_ai(date: String, question: String, answer: String, app: AppHandle) -> Result<String, String> {
     if !date.chars().all(|c| c.is_ascii_digit() || c == '-') { return Err("잘못된 날짜".into()); }
@@ -444,6 +509,13 @@ fn note_create(id: String, name: String, content: String, app: AppHandle) -> Res
 }
 
 // 노트 검색 추가·수정. id가 비어 있으면 새로 만듦. 저장한 id를 돌려줌
+// 아직 없는 [[링크]]로 개념 노트 만들기 (있으면 그 노트). 돌려주는 값: (경로, 새로 만들었는지)
+#[tauri::command]
+fn concept_create(src: String, name: String, date: String, app: AppHandle) -> Result<(String, bool), String> {
+    let c = config::load(&config_file(&app))?;
+    wiki::create_concept(&c.vault_dir, &src, &name, &date)
+}
+
 #[tauri::command]
 fn save_note_search(mut search: config::NoteSearch, hotkey: String, app: AppHandle) -> Result<String, String> {
     search.name = search.name.trim().to_string();
@@ -538,6 +610,11 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let h = app.handle().clone();
             for (action, e) in register_hotkeys(&h) { eprintln!("단축키 등록 실패 {action}: {e}"); }
+            if let Ok(c) = config::load(&config_file(&h)) {
+                expand::set_snippets(&c.snippets);
+                if c.snippet_expand && !expand::enable(true) { eprintln!("스니펫 자동 확장: 입력 모니터링 권한 필요"); }
+            }
+            clip::start(&data_dir(&h).join("clipboard.json"), config::load(&config_file(&h)).map(|c| c.clipboard_history).unwrap_or(true));
             if let Ok(b) = std::fs::read(usage_file(&h)) {
                 if let Ok(u) = serde_json::from_slice(&b) { *h.state::<AppState>().usage.lock().unwrap() = u; }
             }
@@ -574,11 +651,11 @@ fn main() {
             if *app.state::<AppState>().suspended.lock().unwrap() { register_hotkeys(app); }
         })
         .invoke_handler(tauri::generate_handler![search, icon, launch, open_path, reveal, files_wide, open_url, hide,
-            files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, save_ai,
+            files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
             notes_load, note_set_field, note_toggle_task, note_add_record, memo_daily, memo_daily_read, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
-            close_window, set_pinned, set_placed])
+            close_window, set_pinned, set_placed, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
         .run(tauri::generate_context!())
         .expect("Baro 실행 실패");
 }

@@ -58,12 +58,13 @@ export function resolver(docs: Doc[]) {
   const byBase = new Map<string, number[]>();
   const byName = new Map<string, number>();
   docs.forEach((d, i) => {
-    const k = baseName(d.file).toLowerCase();
+    const k = baseName(d.file).normalize("NFC").toLowerCase();
     byBase.set(k, [...(byBase.get(k) ?? []), i]);
-    if (!byName.has(d.name.toLowerCase())) byName.set(d.name.toLowerCase(), i);
+    const n = d.name.normalize("NFC").toLowerCase();
+    if (!byName.has(n)) byName.set(n, i);
   });
   return (link: string, from: Doc): number | undefined => {
-    const parts = link.toLowerCase().split("/").filter(Boolean);
+    const parts = link.normalize("NFC").toLowerCase().split("/").filter(Boolean);
     const cands = byBase.get(parts[parts.length - 1] ?? "");
     if (!cands) return parts.length === 1 ? byName.get(parts[0]) : undefined;
     if (cands.length === 1) return cands[0];
@@ -96,9 +97,15 @@ function directed(docs: Doc[]) {
 }
 
 // 노트마다 가는 링크·오는 링크 (미리보기용)
+// missing: 아직 노트가 없는 링크 (그림·첨부 파일 링크는 제외) → 개념 노트 만들기
 export function linkInfo(docs: Doc[]) {
-  const m = new Map<string, { out: Doc[]; inn: Doc[] }>(docs.map(d => [d.file, { out: [], inn: [] }]));
+  const m = new Map<string, { out: Doc[]; inn: Doc[]; missing: string[] }>(docs.map(d => [d.file, { out: [], inn: [], missing: [] }]));
   for (const [i, j] of directed(docs)) { m.get(docs[i].file)!.out.push(docs[j]); m.get(docs[j].file)!.inn.push(docs[i]); }
+  const resolve = resolver(docs);
+  for (const d of docs) {
+    const miss = linksOf(d).filter(l => !/\.[a-z0-9]{2,5}$/i.test(l) && resolve(l, d) === undefined).map(l => l.split("/").pop()!.trim());
+    m.get(d.file)!.missing = [...new Set(miss)].filter(Boolean);
+  }
   return m;
 }
 

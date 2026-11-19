@@ -37,10 +37,14 @@ pub struct Config {
     pub ai_save_dir: String,
     // 전체 노트 그래프로 볼 Obsidian Vault 폴더
     pub vault_dir: String,
+    // 클립보드 기록 (복사한 글 최근 200개, 비밀번호·키처럼 보이는 글은 제외)
+    pub clipboard_history: bool,
+    // 스니펫 자동 확장: 어느 앱에서든 ";키워드" 입력 → 본문 (입력 모니터링 권한 필요, 기본 꺼짐)
+    pub snippet_expand: bool,
 }
 
 // 고정 기능의 단축키 기본값
-pub const HOTKEY_ACTIONS: &[(&str, &str)] = &[("baro", "Alt+Space"), ("ai", ""), ("store", ""), ("graph", ""), ("files", ""), ("memo", "")];
+pub const HOTKEY_ACTIONS: &[(&str, &str)] = &[("baro", "Alt+Space"), ("ai", ""), ("store", ""), ("graph", ""), ("files", ""), ("memo", ""), ("clipboard", "")];
 
 fn ql(k: &str, n: &str, u: &str) -> Quicklink { Quicklink { keyword: k.into(), name: n.into(), url: u.into() } }
 fn sn(k: &str, n: &str, t: &str) -> Snippet { Snippet { keyword: k.into(), name: n.into(), text: t.into() } }
@@ -71,6 +75,8 @@ impl Default for Config {
             hotkeys: [("note:linux", "Alt+L")].iter().map(|(a, k)| (a.to_string(), k.to_string())).collect(),
             ai_save_dir: "/Volumes/Disk/MyBrain/00_Inbox/AI".into(),
             vault_dir: "/Volumes/Disk/MyBrain".into(),
+            clipboard_history: true,
+            snippet_expand: false,
         }
     }
 }

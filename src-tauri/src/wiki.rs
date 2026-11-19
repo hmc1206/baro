@@ -117,6 +117,41 @@ pub fn create(dir: &str, name: &str, content: &str) -> Result<String, String> {
     Ok(p.to_string_lossy().into_owned())
 }
 
+// 개념 노트 만들기: 아직 없는 [[링크]] 이름으로 틀에 맞춘 노트를 만듦
+// - Vault 어디에든 같은 이름 노트가 이미 있으면 만들지 않고 그 노트를 돌려줌 (중복 방지)
+// - 위치: 링크를 건 노트가 02_Knowledge/<분야>/… 안이면 그 분야 폴더, 아니면 00_Inbox
+// 돌려주는 값: (파일 경로, 새로 만들었는지)
+pub fn concept_dir(vault: &Path, src: &Path) -> std::path::PathBuf {
+    let rel: Vec<String> = src.strip_prefix(vault).map(|r| r.iter().map(|c| c.to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    if rel.len() >= 3 && rel[0] == "02_Knowledge" { vault.join(&rel[0]).join(&rel[1]) } else { vault.join("00_Inbox") }
+}
+
+pub fn create_concept(vault: &str, src: &str, name: &str, date: &str) -> Result<(String, bool), String> {
+    use unicode_normalization::UnicodeNormalization;
+    let v = Path::new(vault);
+    if !v.is_dir() { return Err(format!("Vault를 읽을 수 없어요. 외장 디스크 연결을 확인하세요.\n{vault}")); }
+    let name = name.trim().trim_end_matches(".md").trim();
+    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|', '#', '^', '[', ']']) {
+        return Err(format!("노트 이름으로 쓸 수 없는 글자가 있어요: {name}"));
+    }
+    let key = name.nfc().collect::<String>().to_lowercase();
+    for e in walkdir::WalkDir::new(v).into_iter().filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.')).flatten() {
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("md") { continue; }
+        let stem = p.file_stem().map(|s| s.to_string_lossy().nfc().collect::<String>().to_lowercase()).unwrap_or_default();
+        if stem == key { return Ok((p.to_string_lossy().into_owned(), false)); }
+    }
+    let src_p = Path::new(src);
+    if !src_p.starts_with(v) { return Err("Vault 밖의 노트예요.".into()); }
+    let dir = concept_dir(v, src_p);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let from = src_p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let area = dir.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let tags = if area == "00_inbox" { "[concept]".to_string() } else { format!("[concept, {area}]") };
+    let content = format!("---\ncreated: {date}\ntype: knowledge\ntags: {tags}\nsource: baro\n---\n\n# {name}\n\n## 요약\n- \n\n## 내용\n- \n\n## 예시\n- \n\n## 관련\n[[{from}]]\n");
+    create(&dir.to_string_lossy(), name, &content).map(|p| (p, true))
+}
+
 // 할 일 줄("- [ ] 내용", "1. [x] 내용", 인용 안 "> - [ ]" 포함)이면 (괄호 안 글자 위치, 체크 여부, 내용)
 fn task_marker(line: &str) -> Option<(usize, bool, &str)> {
     let b = line.as_bytes();
@@ -409,5 +444,32 @@ mod tests {
         assert!(super::create(&d, "../x", "x").is_err());
         assert!(super::set_field(&d, &f, "password", "a\nb").is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concept_notes_go_to_area_and_never_duplicate() {
+        let v = std::env::temp_dir().join(format!("baro-concept-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&v);
+        let area = v.join("02_Knowledge/Network-Security/Hacking-Curriculum");
+        std::fs::create_dir_all(&area).unwrap();
+        std::fs::create_dir_all(v.join("01_Projects/X")).unwrap();
+        std::fs::write(area.join("01-기초.md"), "[[OSI-7계층]]").unwrap();
+        std::fs::write(v.join("01_Projects/X/있는노트.md"), "# 있음").unwrap();
+        let vs = v.to_string_lossy().into_owned();
+        let src = area.join("01-기초.md").to_string_lossy().into_owned();
+        let (p, made) = super::create_concept(&vs, &src, "OSI-7계층", "2026-11-19").unwrap();
+        assert!(made && p.ends_with("02_Knowledge/Network-Security/OSI-7계층.md"), "{p}");
+        let t = std::fs::read_to_string(&p).unwrap();
+        assert!(t.contains("# OSI-7계층") && t.contains("[[01-기초]]") && t.contains("tags: [concept, network-security]"));
+        // 다시 만들면 새로 만들지 않고 있는 노트
+        assert_eq!(super::create_concept(&vs, &src, "osi-7계층", "2026-11-19").unwrap(), (p.clone(), false));
+        // 다른 폴더에 같은 이름이 있으면 그 노트
+        let (q, made) = super::create_concept(&vs, &src, "있는노트", "2026-11-19").unwrap();
+        assert!(!made && q.ends_with("01_Projects/X/있는노트.md"));
+        // 분야 밖 노트에서 만들면 00_Inbox
+        let src2 = v.join("01_Projects/X/있는노트.md").to_string_lossy().into_owned();
+        assert!(super::create_concept(&vs, &src2, "새개념", "2026-11-19").unwrap().0.ends_with("00_Inbox/새개념.md"));
+        assert!(super::create_concept(&vs, &src, "../탈출", "2026-11-19").is_err());
+        let _ = std::fs::remove_dir_all(&v);
     }
 }
