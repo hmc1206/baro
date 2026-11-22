@@ -521,7 +521,8 @@ fn note_task_state(id: String, file: String, index: usize, text: String, value: 
 // 노트 머리말 값 바꾸기 (비밀번호 모음의 비밀번호 수정 등). 해당 노트 검색 폴더 안의 파일만
 #[tauri::command]
 fn note_set_field(id: String, file: String, key: String, value: String, app: AppHandle) -> Result<(), String> {
-    wiki::set_field(&note_dir(&app, &id)?, &file, &key, &value)
+    // 커리큘럼은 Vault 어디든 있는 개념 노트에도 (last_studied)
+    wiki::set_field(&record_dir(&app, &id)?, &file, &key, &value)
 }
 
 // 커리큘럼: 노트의 index번째 체크박스 체크/해제

@@ -6,7 +6,7 @@ import {
   query, fileItems, storeItems, homeItems, aiItem, notesAiItem, iconFor, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry,
 } from "./commands";
-import { loadDocs, rank, byCategory, byStage, nextUp, conceptsOf, conceptDocs, studyCard, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
+import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, conceptsOf, conceptDocs, studyCard, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
 import { ICONS } from "./icons";
 import { NoteGraph, linkInfo } from "./graph";
 
@@ -149,6 +149,13 @@ type Memo = { stage: Stage | null; from: Mode; saved: string | null; error: stri
 type Removed = { sec: string; id: string; file: string; date: string; line: number; text: string };
 const RECORD = { learn: "배운 점", stuck: "막힌 점과 해결", cmd: "사용한 명령어" } as const;
 const pad = (n: number) => String(n).padStart(2, "0");
+// 마지막 공부 날짜 → "오늘", "3일 전"
+const ago = (date?: string) => {
+  const t = date && Date.parse(`${date}T00:00:00`);
+  if (!t) return "";
+  const n = Math.round((Date.parse(`${now().date}T00:00:00`) - t) / 86400000);
+  return n <= 0 ? "오늘 공부" : `${n}일 전 공부`;
+};
 const now = () => { const d = new Date(); return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` }; };
 // 명령어 기록: 한 줄이면 "- `cmd`", 여러 줄이거나 `가 있으면 코드 블록
 const cmdBlock = (s: string) => !s.includes("\n") && !s.includes("`") ? `- \`${s}\`` : "```bash\n" + s + "\n```";
@@ -303,19 +310,23 @@ export default function App() {
     }
   };
   // 단계 → 개념 목록
-  const openConcepts = (stage: Doc, focus?: number) => {
+  const openConcepts = (stage: Doc, focus?: string) => {
     const s = notes.search;
     if (!s) return;
     setConc({ stage, docs: [], loading: true, error: null, prevQ: q, prevSel: sel });
     setQ(""); setSel(0); setMenu(false);
     conceptDocs(s, stage)
       .then(docs => { setConc(c => c?.stage === stage ? { ...c, docs, loading: false } : c);
-        const i = focus === undefined ? -1 : docs.findIndex(d => d.concept?.hubIndex === focus);
+        const i = focus === undefined ? -1 : docs.findIndex(d => d.concept?.name === focus);
         if (i >= 0) setSel(i); })
       .catch(e => setConc(c => c?.stage === stage ? { ...c, loading: false, error: String(e) } : c));
   };
+  // 개념 노트 머리말에 마지막으로 공부한 날 (머리말이 없거나 노트가 없으면 건너뜀)
+  const stampStudied = (file: string) => file
+    ? invoke("note_set_field", { id: notes.search!.id, file, key: "last_studied", value: now().date }).catch(() => {}) : Promise.resolve();
   const setConceptStatus = (d: Doc, value: string) => invoke("note_task_state",
     { id: notes.search!.id, file: d.concept!.hubFile, index: d.concept!.hubIndex, text: d.concept!.hubText, value })
+    .then(() => value !== "학습 전" && d.concept && !d.next ? stampStudied(d.file) : undefined)
     .then(reloadDocs).catch(failNote("상태를 바꾸지 못했어요"));
   const failNote = (title: string) => (e: unknown) => { setAi(null); setView({ kind: "text", title, text: String(e), error: true }); };
   const setStatus = (d: Doc, value: string) => (d.heading
@@ -333,6 +344,7 @@ export default function App() {
     const i = boxes.indexOf(el), k = map ? map[i] : i, task = curDoc.tasks[k];
     if (!task || boxes.length !== (map ? map.length : curDoc.tasks.length)) return;
     invoke("note_toggle_task", { id: notes.search.id, file: curDoc.file, index: (curDoc.taskBase ?? 0) + k, text: task.text, done: !task.done })
+      .then(() => curDoc.concept && !task.done ? stampStudied(curDoc.file) : undefined)
       .then(reloadDocs).catch(failNote("체크하지 못했어요"));
   };
   const loadClips = () => Promise.all([invoke<Clip[]>("clip_list"), invoke<boolean>("clip_enabled")])
@@ -561,7 +573,7 @@ export default function App() {
   // 노트 검색: 검색어가 없으면 분류(폴더)별 전체, 있으면 점수순
   const noteList = useMemo(
     () => mode === "note" && conc ? conc.docs.filter(d => !q.trim() || `${d.name} ${d.summary}`.toLowerCase().includes(q.trim().toLowerCase()))
-      : mode === "note" ? (q.trim() ? rank(notes.docs, q).slice(0, 80)
+      : mode === "note" ? (q.trim() ? [...(notes.search?.kind === "curriculum" ? conceptHits(notes.docs, q) : []), ...rank(notes.docs, q).slice(0, 80)]
       : notes.search?.kind === "curriculum" ? [...nextUp(notes.docs), ...[...notes.docs].sort(byStage)]
       : byCategory(notes.docs)) : [],
     [mode, notes.docs, q, notes.search?.kind, conc]);
@@ -598,7 +610,7 @@ export default function App() {
         await createConcept(conc?.stage.record ?? conc?.stage ?? d, c.link || c.name); await reloadDocs(); } };
       return { id: `c-${c.hubIndex}-${c.name}`, title: d.name, kind: "wiki", section: q.trim() ? undefined : c.stage,
         glyph: !d.file ? "doc" : isDone(st) ? "done" : isDoing(st) ? "doing" : "todo",
-        subtitle: [st, c.priority, !d.file ? "노트 없음" : ""].filter(Boolean).join(" · ") || c.desc.slice(0, 40),
+        subtitle: [st, c.priority, !d.file ? "노트 없음" : "", ago(d.meta.last)].filter(Boolean).join(" · ") || c.desc.slice(0, 40),
         actions: d.file ? [
           { title: "Obsidian에서 열기", shortcut: "⌘O", run: () => openObsidian(d.file) },
           { title: "이 개념에 기록하기", shortcut: "⌘N", keep: true, run: async () => openMemo({ search: notes.search!, doc: d }, "note") },
@@ -608,9 +620,10 @@ export default function App() {
     }
     if (d.next) {
       const c = d.next.concept;
-      return { id: `next-${d.category}`, title: c.name, kind: "wiki", glyph: c.status === "학습 중" ? "doing" : "todo", section: "다음 할 일",
-        subtitle: [d.category, d.name, c.hubIndex < 0 ? `개념 ${conceptsOf(d).length}개` : "", d.next.why].filter(Boolean).join(" · "),
-        actions: [{ title: "공부 카드 열기", keep: true, run: async () => openConcepts(d, c.hubIndex) },
+      return { id: `next-${d.next.section}-${d.category}-${c.hubIndex}-${c.name}`, title: c.name, kind: "wiki", section: d.next.section,
+        glyph: isDone(c.status) ? "done" : isDoing(c.status) ? "doing" : "todo",
+        subtitle: [d.category, d.name, c.hubIndex < 0 && d.next.section === "다음 할 일" ? `개념 ${conceptsOf(d).length}개` : "", d.next.why].filter(Boolean).join(" · "),
+        actions: [{ title: "공부 카드 열기", keep: true, run: async () => openConcepts(d, c.name) },
           c.hubIndex >= 0 ? { title: `상태를 "${nextStatus(c.status || "학습 전")}"(으)로`, shortcut: "⌘D", keep: true,
             run: () => setConceptStatus({ ...d, concept: c }, nextStatus(c.status || "학습 전")) }
             : { title: `단계 상태를 "${STATUS[nextStatus(d.meta.status || "학습 전")] ?? nextStatus(d.meta.status || "학습 전")}"(으)로`, shortcut: "⌘D", keep: true,

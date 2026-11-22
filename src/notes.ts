@@ -42,7 +42,7 @@ export type Doc = {
   heading?: string; taskBase?: number; order?: number; record?: Doc;
   concept?: Concept; // 단계 안의 개념 하나 (허브 항목 + 개념 노트)
   taskMap?: number[]; // 공부 카드의 체크박스 → 노트 전체 체크박스 순서
-  next?: { concept: Concept; why: string }; // "다음 할 일" 칸: 이 단계에서 공부할 개념
+  next?: { concept: Concept; why: string; section: string }; // 단계 목록 위 개념 칸(다음 할 일·복습·개념 검색): 이 단계의 개념 하나
 };
 // 허브 단계의 개념 항목. hubIndex: 허브 파일 전체에서 그 체크박스 줄의 순서(-1이면 체크박스 아님)
 export type Concept = { name: string; link: string; hubFile: string; hubIndex: number; hubText: string;
@@ -314,7 +314,7 @@ export function nextUp(stages: Doc[]): Doc[] {
     if (!list.length) {
       const st = plain.get(field)!.find(x => x.meta.status !== "완료");
       const c = st && conceptsOf(st)[0];
-      if (st && c) out.push({ ...st, next: { concept: c, why: st.meta.status === "학습 중" ? "이어서 공부" : "단계 시작" } });
+      if (st && c) out.push({ ...st, next: { concept: c, why: st.meta.status === "학습 중" ? "이어서 공부" : "단계 시작", section: "다음 할 일" } });
       continue;
     }
     const status = new Map(list.map(x => [conceptId(x.c.name), x.c.status]));
@@ -325,9 +325,26 @@ export function nextUp(stages: Doc[]): Doc[] {
     if (!pick) continue;
     const pre = prereqs(pick.c);
     const why = doing ? "이어서 공부" : pre.length ? `선행 ${pre.join(", ")} 완료` : "선행 없음";
-    out.push({ ...pick.stage, next: { concept: pick.c, why } });
+    out.push({ ...pick.stage, next: { concept: pick.c, why, section: "다음 할 일" } });
   }
+  // 복습 큐: 복습 필요로 표시한 개념 (분야·단계 순서)
+  for (const list of fields.values())
+    for (const x of list) if (x.c.status === "복습 필요") out.push({ ...x.stage, next: { concept: x.c, why: "복습 필요", section: "복습할 개념" } });
   return out;
+}
+
+// 분야를 넘는 개념 검색: 모든 허브 단계의 개념 이름·번호에서 찾기 (이름 시작 일치 먼저)
+export function conceptHits(stages: Doc[], query: string, limit = 30): Doc[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const hits: { d: Doc; s: number }[] = [];
+  for (const st of [...stages].filter(d => d.heading).sort(byStage))
+    for (const c of conceptsOf(st)) {
+      const name = c.name.toLowerCase(), words = q.split(/\s+/);
+      const s = name.startsWith(q) ? 3 : name.includes(q) ? 2 : words.every(w => `${name} ${c.desc.toLowerCase()}`.includes(w)) ? 1 : 0;
+      if (s) hits.push({ d: { ...st, next: { concept: c, why: c.status, section: "개념" } }, s });
+    }
+  return hits.sort((a, b) => b.s - a.s).slice(0, limit).map(x => x.d);
 }
 
 // 단계의 개념들을 개념 노트와 함께 읽기 (노트가 없는 개념은 file 빈 값)
@@ -341,7 +358,8 @@ export async function conceptDocs(search: NoteSearch, stage: Doc): Promise<Doc[]
     const text = body.trim();
     return {
       name: c.name, category: c.stage, summary: c.desc || String(data.summary ?? firstLine(text)), aliases: toList(data.aliases), related: [],
-      markdown: "", body: text, examples: [], file: n?.file ?? "", stub: !n, meta: { status: c.status }, tasks: n ? tasksOf(body) : [],
+      markdown: "", body: text, examples: [], file: n?.file ?? "", stub: !n,
+      meta: { status: c.status, ...(data.last_studied ? { last: String(data.last_studied) } : {}) }, tasks: n ? tasksOf(body) : [],
       order: i, concept: c,
     };
   });
