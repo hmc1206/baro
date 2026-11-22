@@ -23,14 +23,103 @@ fn read_md(dir: &Path) -> Vec<Note> {
     }).collect()
 }
 
-// 명령어 사전은 "![[다른 노트#절]]" 임베드를 풀기 위해 상위 폴더의 노트도 함께 읽음
-pub fn load(dir: &str, kind: &str) -> Result<Notes, String> {
+// 명령어 사전은 "![[다른 노트#절]]" 임베드를 풀기 위해 상위 폴더의 노트도 함께 읽음.
+// 커리큘럼 폴더에 허브 노트(머리말 type: curriculum-hub)가 있으면 허브만 넘기고(허브의 "### 단계"가 단계 하나),
+// 허브가 가리키는 단계 노트("단계 노트: [[이름|…]]")는 Vault에서 찾아 chapters로 (빠른 메모 기록용)
+pub fn load(dir: &str, kind: &str, vault: &str) -> Result<Notes, String> {
     let d = Path::new(dir);
     if !d.is_dir() {
         return Err(format!("폴더를 읽을 수 없어요. 외장 디스크 연결이나 노트 검색의 폴더 경로를 확인하세요.\n{dir}"));
     }
-    let chapters = if kind == "commands" { d.parent().map(read_md).unwrap_or_default() } else { vec![] };
-    Ok(Notes { notes: read_md(d), chapters })
+    let mut notes = read_md(d);
+    let mut chapters = if kind == "commands" { d.parent().map(read_md).unwrap_or_default() } else { vec![] };
+    if kind == "curriculum" && notes.iter().any(|n| is_hub(&n.text)) {
+        notes.retain(|n| is_hub(&n.text));
+        let want: Vec<String> = notes.iter().flat_map(|n| stage_links(&n.text)).collect();
+        chapters = named(dir, vault, &want);
+    }
+    Ok(Notes { notes, chapters })
+}
+
+// 이름(파일 이름에서 .md 뺀 것)으로 Vault에서 노트 찾기. 같은 이름이면 dir 안의 노트 먼저, 이름마다 하나
+pub fn named(dir: &str, vault: &str, names: &[String]) -> Vec<Note> {
+    let want: std::collections::HashSet<String> = names.iter().map(|n| n.nfc().collect()).collect();
+    if want.is_empty() { return vec![]; }
+    let root = Path::new(if vault.is_empty() { dir } else { vault });
+    let base: String = Path::new(dir).to_string_lossy().nfc().collect();
+    let mut found: Vec<Note> = read_md(root).into_iter().filter(|n| want.contains(note_name(&n.file))).collect();
+    found.sort_by_key(|n| !n.file.starts_with(&base)); // 같은 이름이면 커리큘럼 폴더 안의 노트 먼저
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|n| seen.insert(note_name(&n.file).to_string()));
+    found
+}
+
+fn note_name(file: &str) -> &str { file.rsplit('/').next().unwrap_or(file).trim_end_matches(".md") }
+
+// 머리말에 type: curriculum-hub, 또는 "## 단계별 학습" 칸과 "**단계 상태**:" 줄이 있는 노트 (CS 허브는 원본 머리말 type: curriculum)
+fn is_hub(text: &str) -> bool {
+    let typed = text.strip_prefix("---\n").is_some_and(|rest| rest.split("\n---").next().unwrap_or("").lines()
+        .any(|l| matches!(l.trim(), "type: curriculum-hub" | "type: \"curriculum-hub\"" | "type: 'curriculum-hub'")));
+    typed || (text.lines().any(|l| l.starts_with("## 단계별 학습")) && text.lines().any(|l| l.starts_with("**단계 상태**:")))
+}
+
+// 허브의 "**단계 상태**: … 단계 노트: [[이름|…]]" 줄에서 단계 노트 이름들
+fn stage_links(text: &str) -> Vec<String> {
+    text.lines().filter(|l| l.starts_with("**단계 상태**")).filter_map(|l| {
+        let s = &l[l.find("단계 노트: [[")? + "단계 노트: [[".len()..];
+        let e = s.find(|c| c == '|' || c == ']' || c == '#')?;
+        Some(s[..e].trim().to_string())
+    }).collect()
+}
+
+pub const STAGE_STATES: &[&str] = &["학습 전", "학습 중", "복습 필요", "완료"];
+
+// 커리큘럼 허브의 "### 단계" 상태 바꾸기: 그 칸의 "**단계 상태**: 값 · …" 줄과 "한눈에 보기" 표의 그 단계 줄(마지막 칸)
+pub fn set_stage_status(dir: &str, file: &str, heading: &str, value: &str) -> Result<(), String> {
+    if !STAGE_STATES.contains(&value) { return Err("상태 이름이 잘못됐어요.".into()); }
+    let f = inside(dir, file)?;
+    let text = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
+    let out = with_stage_status(&text, heading, value)?;
+    let tmp = f.with_extension("md.baro-tmp");
+    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &f).map_err(|e| e.to_string())
+}
+
+fn with_stage_status(text: &str, heading: &str, value: &str) -> Result<String, String> {
+    let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
+    let want = format!("### {}", heading.trim());
+    let h = lines.iter().position(|l| l.trim_end() == want).ok_or("허브에서 그 단계를 찾지 못했어요. 목록을 다시 열어 주세요.")?;
+    const P: &str = "**단계 상태**:";
+    let s = (h + 1..lines.len()).take_while(|&i| !lines[i].starts_with('#')).find(|&i| lines[i].starts_with(P))
+        .ok_or("그 단계에 '단계 상태' 줄이 없어요.")?;
+    let r = lines[s][P.len()..].trim_start().to_string();
+    let end = [r.find(" ·"), r.find(" (")].into_iter().flatten().min().unwrap_or(r.len());
+    lines[s] = format!("{P} {value}{}", &r[end..]);
+    let (a, b) = (format!("[[#{}\\|", heading.trim()), format!("[[#{}|", heading.trim()));
+    for l in lines.iter_mut().filter(|l| l.starts_with('|') && (l.contains(&a) || l.contains(&b))) {
+        let t = l.trim_end();
+        if let Some(k) = t.strip_suffix('|').and_then(|i| i.rfind('|')) { *l = format!("{}| {value} |", &t[..k]); }
+    }
+    Ok(lines.join("\n"))
+}
+
+// 개념 상태가 바뀐 뒤 그 줄이 속한 "### 단계" 상태 맞추기:
+// 개념이 모두 완료 → 완료, 완료였는데 덜 끝난 개념이 생김 → 학습 중, 학습 전인데 시작한 개념이 있음 → 학습 중. 그 밖(복습 필요 등)은 그대로
+fn roll_up(text: &str, line: usize) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let Some(h) = (0..=line.min(lines.len().saturating_sub(1))).rev().find(|&i| lines[i].starts_with('#')) else { return text.into() };
+    if !lines[h].starts_with("### ") { return text.into(); }
+    let end = (h + 1..lines.len()).find(|&i| lines[i].starts_with('#')).unwrap_or(lines.len());
+    let states: Vec<&str> = lines[h + 1..end].iter().filter(|l| task_marker(l).is_some())
+        .filter_map(|l| STAGE_STATES.iter().copied().find(|s| l.trim_end().ends_with(&format!(" · {s}")))).collect();
+    let Some(cur) = lines[h + 1..end].iter().find_map(|l| l.strip_prefix("**단계 상태**:")).map(|r| r.trim_start()) else { return text.into() };
+    if states.is_empty() { return text.into(); }
+    let cur = STAGE_STATES.iter().copied().find(|s| cur.starts_with(s)).unwrap_or("");
+    let next = if states.iter().all(|s| *s == "완료") { "완료" }
+        else if cur == "완료" || (cur == "학습 전" && states.iter().any(|s| *s != "학습 전")) { "학습 중" }
+        else { cur };
+    if next == cur || next.is_empty() { return text.into(); }
+    with_stage_status(text, lines[h].trim_start_matches("### ").trim(), next).unwrap_or_else(|_| text.into())
 }
 
 // AI 답변을 노트로 저장. 파일 이름은 "날짜-질문 앞부분.md", 같은 이름이 있으면 -2, -3… (덮어쓰지 않음)
@@ -162,8 +251,33 @@ fn task_marker(line: &str) -> Option<(usize, bool, &str)> {
 }
 
 // index번째 할 일 줄을 체크/해제. 코드 블록 안과 머리말은 세지 않음 (화면의 체크박스 순서와 같게).
-// 화면이 본 내용(text)과 파일의 그 줄이 다르면 바뀐 것으로 보고 고치지 않음
+// 화면이 본 내용(text)과 파일의 그 줄이 다르면 바뀐 것으로 보고 고치지 않음.
+// 허브 항목 끝의 " · 학습 전" 같은 상태 글자도 함께 (체크 → 완료, 해제 → 학습 전)
 pub fn toggle_task(dir: &str, file: &str, index: usize, text: &str, done: bool) -> Result<(), String> {
+    edit_task(dir, file, index, text, |line, pos| {
+        let mut l = line.to_string();
+        l.replace_range(pos..pos + 1, if done { "x" } else { " " });
+        match STAGE_STATES.iter().find_map(|s| l.strip_suffix(&format!(" · {s}"))) {
+            Some(base) => format!("{base} · {}", if done { "완료" } else { "학습 전" }),
+            None => l,
+        }
+    })
+}
+
+// 허브 개념 항목의 상태 바꾸기: 줄 끝 " · 학습 전" 등을 value로, 완료면 체크·아니면 해제
+pub fn set_task_state(dir: &str, file: &str, index: usize, text: &str, value: &str) -> Result<(), String> {
+    if !STAGE_STATES.contains(&value) { return Err("상태 이름이 잘못됐어요.".into()); }
+    edit_task(dir, file, index, text, |line, pos| {
+        let mut l = line.to_string();
+        l.replace_range(pos..pos + 1, if value == "완료" { "x" } else { " " });
+        match STAGE_STATES.iter().find_map(|s| l.strip_suffix(&format!(" · {s}"))) {
+            Some(base) => format!("{base} · {value}"),
+            None => format!("{l} · {value}"),
+        }
+    })
+}
+
+fn edit_task(dir: &str, file: &str, index: usize, text: &str, edit: impl FnOnce(&str, usize) -> String) -> Result<(), String> {
     let f = inside(dir, file)?;
     let src = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
     let mut start = 0;
@@ -181,7 +295,9 @@ pub fn toggle_task(dir: &str, file: &str, index: usize, text: &str, done: bool) 
                 if n == index {
                     if rest != text.trim() { return Err("노트 내용이 바뀌었어요. 목록을 다시 열어 주세요.".into()); }
                     let mut out = src.clone();
-                    out.replace_range(off + pos..off + pos + 1, if done { "x" } else { " " });
+                    out.replace_range(off..off + l.len(), &edit(l, pos));
+                    // 커리큘럼 허브면 그 단계 상태도 개념 진행에 맞춤
+                    if is_hub(&out) { out = roll_up(&out, out[..off].matches('\n').count()); }
                     let tmp = f.with_extension("md.baro-tmp");
                     std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
                     return std::fs::rename(&tmp, &f).map_err(|e| e.to_string());
@@ -200,7 +316,9 @@ fn insert_under(text: &str, heading: &str, block: &str) -> String {
     let want = format!("### {heading}");
     let Some(h) = lines.iter().position(|l| l.trim_end() == want) else {
         let base = text.trim_end_matches('\n');
-        return format!("{base}\n\n{want}\n{block}\n");
+        // "## 내 기록" 칸도 없으면 함께 만듦 (허브에서 연결된 단계 노트)
+        let top = if lines.iter().any(|l| l.trim_end() == "## 내 기록") { "" } else { "## 내 기록\n\n" };
+        return format!("{base}\n\n{top}{want}\n{block}\n");
     };
     let mut end = lines.len(); // 다음 제목(#) 줄 또는 끝
     for (i, l) in lines.iter().enumerate().skip(h + 1) { if l.starts_with('#') { end = i; break; } }
@@ -358,6 +476,58 @@ mod tests {
     }
 
     #[test]
+    fn curriculum_hub_stages() {
+        let v = std::env::temp_dir().join(format!("baro-hub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&v);
+        let cur = v.join("Curriculum");
+        std::fs::create_dir_all(cur.join("Frontend")).unwrap();
+        std::fs::create_dir_all(v.join("Sec")).unwrap();
+        let hub = "---\ntype: curriculum-hub\nfield: frontend\n---\n# FE\n\n| 단계 | 상태 |\n|---|---|\n| [[#P01 웹\\|P01 웹]] | 학습 전 |\n\n## 단계별 학습\n\n### P01 웹\n\n**단계 상태**: 학습 전 · 약 18시간 · 단계 노트: [[P01-web|열기]]\n\n- [ ] [[a]] · 필수 · 학습 전\n\n### 1단계 보안\n\n**단계 상태**: 학습 전 (메모) · 단계 노트: [[01-sec|열기]]\n";
+        std::fs::write(cur.join("FE-Curriculum.md"), hub).unwrap();
+        std::fs::write(cur.join("Master.md"), "---\ntype: master-roadmap\n---\n# M").unwrap();
+        std::fs::write(cur.join("Frontend/P01-web.md"), "# P01").unwrap();
+        std::fs::write(v.join("Sec/01-sec.md"), "# 1단계").unwrap();
+        let (d, vs) = (cur.to_string_lossy().into_owned(), v.to_string_lossy().into_owned());
+        let n = super::load(&d, "curriculum", &vs).unwrap();
+        // 허브만 단계 목록으로, 단계 노트는 Vault 어디에 있든 chapters로
+        assert_eq!(n.notes.len(), 1);
+        let mut ch: Vec<&str> = n.chapters.iter().map(|c| super::note_name(&c.file)).collect();
+        ch.sort();
+        assert_eq!(ch, ["01-sec", "P01-web"]);
+        let f = cur.join("FE-Curriculum.md").to_string_lossy().into_owned();
+        super::set_stage_status(&d, &f, "P01 웹", "학습 중").unwrap();
+        super::set_stage_status(&d, &f, "1단계 보안", "완료").unwrap();
+        let t = std::fs::read_to_string(&f).unwrap();
+        assert!(t.contains("**단계 상태**: 학습 중 · 약 18시간"), "{t}");
+        assert!(t.contains("| [[#P01 웹\\|P01 웹]] | 학습 중 |"), "{t}");
+        assert!(t.contains("**단계 상태**: 완료 (메모)"), "{t}");
+        assert!(super::set_stage_status(&d, &f, "P01 웹", "아무거나").is_err());
+        assert!(super::set_stage_status(&d, &f, "없는 단계", "완료").is_err());
+        // 체크하면 항목 끝 상태도 완료로, 해제하면 학습 전
+        super::toggle_task(&d, &f, 0, "[[a]] · 필수 · 학습 전", true).unwrap();
+        assert!(std::fs::read_to_string(&f).unwrap().contains("- [x] [[a]] · 필수 · 완료"));
+        super::toggle_task(&d, &f, 0, "[[a]] · 필수 · 완료", false).unwrap();
+        assert!(std::fs::read_to_string(&f).unwrap().contains("- [ ] [[a]] · 필수 · 학습 전"));
+        // 개념 항목 상태: 학습 중이면 체크 해제, 완료면 체크
+        super::set_task_state(&d, &f, 0, "[[a]] · 필수 · 학습 전", "학습 중").unwrap();
+        assert!(std::fs::read_to_string(&f).unwrap().contains("- [ ] [[a]] · 필수 · 학습 중"));
+        super::set_task_state(&d, &f, 0, "[[a]] · 필수 · 학습 중", "완료").unwrap();
+        assert!(std::fs::read_to_string(&f).unwrap().contains("- [x] [[a]] · 필수 · 완료"));
+        assert!(super::set_task_state(&d, &f, 0, "[[a]] · 필수 · 완료", "엉뚱").is_err());
+        // 단계의 개념이 모두 완료면 단계도 완료, 하나라도 다시 풀리면 학습 중
+        let t = std::fs::read_to_string(&f).unwrap();
+        assert!(t.contains("**단계 상태**: 완료 · 약 18시간") && t.contains("| [[#P01 웹\\|P01 웹]] | 완료 |"), "{t}");
+        super::set_task_state(&d, &f, 0, "[[a]] · 필수 · 완료", "복습 필요").unwrap();
+        assert!(std::fs::read_to_string(&f).unwrap().contains("**단계 상태**: 학습 중 · 약 18시간"));
+        assert_eq!(super::named(&d, &vs, &["01-sec".into()]).len(), 1);
+        // 허브가 없는 폴더는 예전처럼 노트 하나 = 단계 하나
+        assert_eq!(super::load(&v.join("Sec").to_string_lossy(), "curriculum", &vs).unwrap().notes.len(), 1);
+        // 내 기록 칸이 없는 단계 노트엔 칸을 만들어 기록
+        assert_eq!(super::insert_under("# P01\n", "배운 점", "- 새로"), "# P01\n\n## 내 기록\n\n### 배운 점\n- 새로\n");
+        let _ = std::fs::remove_dir_all(&v);
+    }
+
+    #[test]
     fn insert_under_heading() {
         let t = "# 단계\n## 내 기록\n### 배운 점\n\n### 막힌 점과 해결\n- 예전 것\n\n### 사용한 명령어\n\n## 관련\n[[목차]]\n";
         let a = super::insert_under(t, "배운 점", "- 새로 배움");
@@ -365,7 +535,7 @@ mod tests {
         let b = super::insert_under(&a, "막힌 점과 해결", "- 둘째");
         assert!(b.contains("- 예전 것\n- 둘째\n\n### 사용한 명령어"), "{b}");
         let c = super::insert_under("# 노트\n본문\n", "사용한 명령어", "- `ls`");
-        assert_eq!(c, "# 노트\n본문\n\n### 사용한 명령어\n- `ls`\n");
+        assert_eq!(c, "# 노트\n본문\n\n## 내 기록\n\n### 사용한 명령어\n- `ls`\n");
         let d = super::insert_under("### 배운 점\n- 하나", "배운 점", "- 둘");
         assert_eq!(d, "### 배운 점\n- 하나\n- 둘\n");
     }

@@ -480,12 +480,42 @@ async fn notes_load(id: String, app: AppHandle) -> Result<wiki::Notes, String> {
     // "__vault": 전체 노트 그래프용. Vault 전체를 일반 노트 방식으로 읽음
     let s = if id == "__vault" { config::NoteSearch { id, name: String::new(), dir: c.vault_dir.clone(), kind: "notes".into() } }
         else { c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")? };
-    tauri::async_runtime::spawn_blocking(move || { let r = wiki::load(&s.dir, &s.kind); vault::save(); r }).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || { let r = wiki::load(&s.dir, &s.kind, &c.vault_dir); vault::save(); r }).await.map_err(|e| e.to_string())?
 }
 
 fn note_dir(app: &AppHandle, id: &str) -> Result<String, String> {
     let c = config::load(&config_file(app))?;
     c.note_searches.into_iter().find(|n| n.id == id).map(|n| n.dir).ok_or("노트 검색을 찾지 못했어요.".into())
+}
+
+// 빠른 메모 기록·사진을 쓸 수 있는 폴더: 노트 검색 폴더. 커리큘럼은 허브가 가리키는 단계 노트가
+// 다른 폴더(예: Network-Security/Hacking-Curriculum)에 있을 수 있어 Vault 전체
+fn record_dir(app: &AppHandle, id: &str) -> Result<String, String> {
+    let c = config::load(&config_file(app))?;
+    let n = c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")?;
+    Ok(if n.kind == "curriculum" && !c.vault_dir.is_empty() { c.vault_dir } else { n.dir })
+}
+
+// 커리큘럼 허브: "### 단계"의 상태 바꾸기 (학습 전·학습 중·복습 필요·완료)
+#[tauri::command]
+fn note_stage_status(id: String, file: String, heading: String, value: String, app: AppHandle) -> Result<(), String> {
+    wiki::set_stage_status(&note_dir(&app, &id)?, &file, &heading, &value)
+}
+
+// 커리큘럼: 이름으로 노트 읽기 (단계의 개념 노트들). Vault 어디에 있든, 커리큘럼 폴더 안 노트 먼저
+#[tauri::command]
+async fn notes_named(id: String, names: Vec<String>, app: AppHandle) -> Result<Vec<wiki::Note>, String> {
+    let c = config::load(&config_file(&app))?;
+    let s = c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")?;
+    if s.kind != "curriculum" { return Err("커리큘럼에서만 쓸 수 있어요.".into()); }
+    let vault = c.vault_dir;
+    tauri::async_runtime::spawn_blocking(move || { let r = wiki::named(&s.dir, &vault, &names); vault::save(); r }).await.map_err(|e| e.to_string())
+}
+
+// 커리큘럼 허브: 개념 항목(index번째 체크박스 줄)의 상태 바꾸기
+#[tauri::command]
+fn note_task_state(id: String, file: String, index: usize, text: String, value: String, app: AppHandle) -> Result<(), String> {
+    wiki::set_task_state(&note_dir(&app, &id)?, &file, index, &text, &value)
 }
 
 // 노트 머리말 값 바꾸기 (비밀번호 모음의 비밀번호 수정 등). 해당 노트 검색 폴더 안의 파일만
@@ -497,7 +527,7 @@ fn note_set_field(id: String, file: String, key: String, value: String, app: App
 // 커리큘럼: 노트의 index번째 체크박스 체크/해제
 #[tauri::command]
 fn note_toggle_task(id: String, file: String, index: usize, text: String, done: bool, app: AppHandle) -> Result<(), String> {
-    wiki::toggle_task(&note_dir(&app, &id)?, &file, index, &text, done)
+    wiki::toggle_task(&record_dir(&app, &id)?, &file, index, &text, done)
 }
 
 // 빠른 메모: 오늘 Daily 노트에 한 줄 추가
@@ -515,14 +545,14 @@ struct Removed { line: usize, text: String }
 fn memo_remove(id: String, file: String, date: String, section: String, index: usize, first: String, app: AppHandle) -> Result<Removed, String> {
     let (line, text) = if section == "daily" {
         wiki::remove_daily(&config::load(&config_file(&app))?.vault_dir, &date, index, &first)?
-    } else { wiki::remove_record(&note_dir(&app, &id)?, &file, &section, index, &first)? };
+    } else { wiki::remove_record(&record_dir(&app, &id)?, &file, &section, index, &first)? };
     Ok(Removed { line, text })
 }
 
 #[tauri::command]
 fn memo_restore(id: String, file: String, date: String, section: String, line: usize, text: String, app: AppHandle) -> Result<(), String> {
     if section == "daily" { wiki::restore_daily(&config::load(&config_file(&app))?.vault_dir, &date, line, &text) }
-    else { wiki::restore_record(&note_dir(&app, &id)?, &file, line, &text) }
+    else { wiki::restore_record(&record_dir(&app, &id)?, &file, line, &text) }
 }
 
 // 빠른 메모 스크린샷: 방금 찍은 것 (클립보드 이미지 또는 스크린샷 파일, 30분 이내)
@@ -542,7 +572,7 @@ async fn shot_latest(app: AppHandle) -> Result<shot::Shot, String> {
 async fn shot_save(source: String, path: Option<String>, name: String, date: String, id: String, file: String, app: AppHandle) -> Result<(String, String), String> {
     let vault = PathBuf::from(config::load(&config_file(&app))?.vault_dir);
     let note_dir = if id.is_empty() { vault.join("03_Daily") } else {
-        wiki::inside(&note_dir(&app, &id)?, &file)?.parent().ok_or("노트 폴더를 찾지 못했어요.")?.to_path_buf()
+        wiki::inside(&record_dir(&app, &id)?, &file)?.parent().ok_or("노트 폴더를 찾지 못했어요.")?.to_path_buf()
     };
     tauri::async_runtime::spawn_blocking(move || {
         let f = shot::save(&source, path.as_deref(), &name, &date, &note_dir.join("attachments"))?;
@@ -570,7 +600,7 @@ fn memo_daily_read(date: String, app: AppHandle) -> String {
 // 빠른 메모: 커리큘럼 단계 노트의 "내 기록" 칸에 추가
 #[tauri::command]
 fn note_add_record(id: String, file: String, section: String, block: String, app: AppHandle) -> Result<(), String> {
-    wiki::add_record(&note_dir(&app, &id)?, &file, &section, &block)
+    wiki::add_record(&record_dir(&app, &id)?, &file, &section, &block)
 }
 
 // 클립보드 글자 (명령어 기록용)
@@ -748,7 +778,7 @@ fn main() {
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, notes_embed_build, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, note_set_field, note_toggle_task, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
+            notes_load, note_set_field, note_toggle_task, note_stage_status, note_task_state, notes_named, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
         .run(tauri::generate_context!())
         .expect("Baro 실행 실패");

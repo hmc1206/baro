@@ -38,7 +38,15 @@ export type Doc = {
   markdown: string; body: string; examples: Example[]; file: string; stub: boolean;
   meta: Record<string, string>; // 머리말의 한 줄 값 (비밀번호 모음: password, login, ssh, key_file …)
   tasks?: Task[]; // 커리큘럼: 체크박스
+  // 커리큘럼 허브의 단계: 허브 안 "### 제목", 허브 전체에서 이 단계 첫 체크박스의 순서, 분야·단계 순서, 연결된 단계 노트(빠른 메모 기록용)
+  heading?: string; taskBase?: number; order?: number; record?: Doc;
+  concept?: Concept; // 단계 안의 개념 하나 (허브 항목 + 개념 노트)
+  taskMap?: number[]; // 공부 카드의 체크박스 → 노트 전체 체크박스 순서
+  next?: { concept: Concept; why: string }; // "다음 할 일" 칸: 이 단계에서 공부할 개념
 };
+// 허브 단계의 개념 항목. hubIndex: 허브 파일 전체에서 그 체크박스 줄의 순서(-1이면 체크박스 아님)
+export type Concept = { name: string; link: string; hubFile: string; hubIndex: number; hubText: string;
+  status: string; priority: string; prereq: string; desc: string; stage: string };
 type Note = { file: string; folder: string; text: string };
 
 // 명령어 사전의 분류 순서 (리눅스 노트 기준). 목록에 없는 분류는 뒤에 이름순
@@ -130,9 +138,56 @@ function firstLine(body: string) {
   return body.split("\n").map(l => l.trim()).find(l => l && !/^(#|```|>|\||---|!\[)/.test(l))?.slice(0, 80) ?? "";
 }
 
+// 커리큘럼 허브(머리말 type: curriculum-hub): "## 단계별 학습" 아래 "### 단계"가 단계 하나.
+// 상태는 "**단계 상태**: 학습 전 · 약 18시간 · 단계 노트: [[이름|…]]" 줄. 분야 순서: 프론트엔드 → 백엔드 → CS → 보안
+const FIELDS: Record<string, [number, string]> = { frontend: [0, "프론트엔드"], backend: [1, "백엔드"], cs: [2, "CS"], security: [3, "보안"] };
+function hubStages(hubs: Note[], stageNotes: Note[], chapters: Map<string, string>): Doc[] {
+  const byName = new Map(stageNotes.map(n => [baseName(n.file), n]));
+  const out: Doc[] = [];
+  for (const h of hubs) {
+    const { data, body } = frontmatter(h.text);
+    const [rank, field] = FIELDS[String(data.field)] ?? [9, baseName(h.file)];
+    const lines = body.split("\n");
+    const start = lines.findIndex(l => /^##\s+단계별 학습/.test(l));
+    if (start < 0) continue;
+    let end = lines.findIndex((l, k) => k > start && /^##\s/.test(l));
+    if (end < 0) end = lines.length;
+    const heads = lines.map((l, k) => k > start && k < end && /^###\s/.test(l) ? k : -1).filter(k => k >= 0);
+    heads.forEach((k, j) => {
+      const sec = lines.slice(k, heads[j + 1] ?? end).join("\n");
+      const heading = lines[k].replace(/^###\s+/, "").trim();
+      const line = sec.match(/^\*\*단계 상태\*\*:\s*(.*)$/m)?.[1] ?? "";
+      const parts = line.split("·").map(x => x.trim());
+      const meta: Record<string, string> = { status: parts[0].replace(/\s*\(.*$/, "").trim() || "학습 전" };
+      const week = parts.find(x => /^\d[\d~-]*주$/.test(x)), hours = parts.find(x => /시간$/.test(x));
+      if (week) meta.week = week.replace(/주$/, "");
+      if (hours) meta.hours = hours;
+      const link = line.match(/단계 노트:\s*\[\[([^\]|#]+)/)?.[1]?.trim();
+      const rn = link ? byName.get(link) : undefined;
+      let record: Doc | undefined;
+      if (rn) {
+        const r = frontmatter(rn.text), text = r.body.trim();
+        record = { name: text.match(/^# (.+)$/m)?.[1]?.trim() ?? heading, category: field, summary: "", aliases: [], related: [],
+          markdown: toMarkdown(text, chapters), body: text, examples: [], file: rn.file, stub: false, meta: {}, tasks: tasksOf(r.body) };
+      }
+      out.push({
+        name: heading, category: field, summary: line, aliases: [field, ...toList(data.tags)], related: [],
+        markdown: toMarkdown(sec, chapters), body: sec, examples: [], file: h.file, stub: false, meta,
+        tasks: tasksOf(sec), heading, taskBase: tasksOf(lines.slice(0, k).join("\n")).length, order: rank * 1000 + j, record,
+      });
+    });
+  }
+  return out;
+}
+// 커리큘럼 순서: 허브 단계는 분야·단계 순서, 단계 노트는 파일 이름 순서
+export const byStage = (a: Doc, b: Doc) => (a.order ?? 0) - (b.order ?? 0) || a.file.localeCompare(b.file, undefined, { numeric: true });
+
 export async function loadDocs(search: NoteSearch): Promise<Doc[]> {
   const w = await invoke<{ notes: Note[]; chapters: Note[] }>("notes_load", { id: search.id });
   const chapters = new Map([...w.chapters, ...w.notes].map(c => [baseName(c.file), c.text]));
+  const isHub = (t: string) => frontmatter(t).data.type === "curriculum-hub" || (/^## 단계별 학습/m.test(t) && /^\*\*단계 상태\*\*:/m.test(t));
+  const hubs = search.kind === "curriculum" ? w.notes.filter(n => isHub(n.text)) : [];
+  if (hubs.length) return hubStages(hubs, w.chapters, chapters);
   // 커리큘럼: 첨부 목록 같은 목록 노트(type: index)는 단계가 아님
   const notes = search.kind === "curriculum" ? w.notes.filter(n => frontmatter(n.text).data.type !== "index") : w.notes;
   return notes.map(n => {
@@ -206,4 +261,144 @@ export function byCategory(docs: Doc[]): Doc[] {
   const order = (c: string) => { const i = CATEGORY_ORDER.indexOf(c); return i < 0 ? CATEGORY_ORDER.length : i; };
   return [...docs].sort((a, b) => order(a.category) - order(b.category) || a.category.localeCompare(b.category)
     || Number(a.stub) - Number(b.stub) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
+
+// ── 개념 단위 공부 ──
+// 단계(허브 칸)의 개념 목록: "- [ ] [[링크|이름]] · 필수 · 선행: … · 학습 전" 줄, 보안처럼 "- 이름 — 설명 (→ [[링크]])" 줄
+export function conceptsOf(stage: Doc): Concept[] {
+  const out: Concept[] = [];
+  let fence = "", n = 0, inKey = false;
+  for (const raw of stage.body.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    const f = line.trim().match(/^(```|~~~)/)?.[1];
+    if (f) { if (!fence) fence = f; else if (f === fence) fence = ""; continue; }
+    if (fence) continue;
+    if (/^\s*-\s+\*\*/.test(line)) inKey = /핵심 개념/.test(line); // "- **핵심 개념(원본)**:" 아래만
+    const m = line.match(TASK);
+    if (m) {
+      const idx = (stage.taskBase ?? 0) + n++;
+      const lm = m[2].match(/^\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\](.*)$/);
+      if (!lm) continue;
+      const parts = lm[3].split("·").map(x => x.trim()).filter(Boolean);
+      const state = parts.find(x => ["학습 전", "학습 중", "복습 필요", "완료"].includes(x)) ?? (m[1] !== " " ? "완료" : "학습 전");
+      out.push({ name: (lm[2] ?? lm[1]).trim(), link: lm[1].trim(), hubFile: stage.file, hubIndex: idx, hubText: m[2].trim(), status: state,
+        priority: parts.find(x => /^(필수|선택|심화)/.test(x)) ?? "", prereq: parts.find(x => x.startsWith("선행"))?.replace(/^선행:\s*/, "") ?? "",
+        desc: "", stage: stage.name });
+      continue;
+    }
+    const b = inKey && line.match(/^\s+-\s+(.+?)\s+—\s+(.*)$/);
+    if (b) {
+      const link = b[2].match(/\[\[([^\]|#]+)/)?.[1]?.trim() ?? "";
+      out.push({ name: b[1].trim(), link, hubFile: stage.file, hubIndex: -1, hubText: "", status: "", priority: "", prereq: "",
+        desc: b[2].replace(/\s*→.*$/, "").replace(/\*\(.*?\)\*/g, "").trim(), stage: stage.name });
+    }
+  }
+  return out;
+}
+
+// 다음 할 일: 분야마다 하나. 학습 중인 개념이 있으면 그것(이어서), 없으면 순서상 첫 미완료 개념 중 선행 개념이 모두 완료인 것.
+// 선행은 같은 분야 개념 번호(이름 첫 단어). 허브에 없는 번호는 막지 않음
+export const conceptId = (name: string) => name.trim().split(/\s+/)[0];
+export function nextUp(stages: Doc[]): Doc[] {
+  const fields = new Map<string, { stage: Doc; c: Concept }[]>(), plain = new Map<string, Doc[]>();
+  for (const st of [...stages].filter(d => d.heading).sort(byStage)) {
+    const cs = conceptsOf(st), list = fields.get(st.category) ?? [];
+    for (const c of cs) if (c.hubIndex >= 0) list.push({ stage: st, c });
+    fields.set(st.category, list);
+    plain.set(st.category, [...plain.get(st.category) ?? [], st]);
+  }
+  const out: Doc[] = [];
+  for (const [field, list] of fields) {
+    // 보안처럼 개념 체크박스가 없는 분야: 단계 상태로 첫 미완료 단계
+    if (!list.length) {
+      const st = plain.get(field)!.find(x => x.meta.status !== "완료");
+      const c = st && conceptsOf(st)[0];
+      if (st && c) out.push({ ...st, next: { concept: c, why: st.meta.status === "학습 중" ? "이어서 공부" : "단계 시작" } });
+      continue;
+    }
+    const status = new Map(list.map(x => [conceptId(x.c.name), x.c.status]));
+    const prereqs = (c: Concept) => c.prereq.split(/[,，]/).map(x => x.trim()).filter(x => x && x !== "없음");
+    const open = (c: Concept) => prereqs(c).every(p => !status.has(p) || status.get(p) === "완료");
+    const doing = list.find(x => x.c.status === "학습 중");
+    const pick = doing ?? list.find(x => x.c.status !== "완료" && x.c.status !== "복습 필요" && open(x.c));
+    if (!pick) continue;
+    const pre = prereqs(pick.c);
+    const why = doing ? "이어서 공부" : pre.length ? `선행 ${pre.join(", ")} 완료` : "선행 없음";
+    out.push({ ...pick.stage, next: { concept: pick.c, why } });
+  }
+  return out;
+}
+
+// 단계의 개념들을 개념 노트와 함께 읽기 (노트가 없는 개념은 file 빈 값)
+export async function conceptDocs(search: NoteSearch, stage: Doc): Promise<Doc[]> {
+  const cs = conceptsOf(stage);
+  const notes = await invoke<Note[]>("notes_named", { id: search.id, names: [...new Set(cs.map(c => c.link).filter(Boolean))] });
+  const byName = new Map(notes.map(n => [baseName(n.file).normalize("NFC"), n]));
+  return cs.map((c, i) => {
+    const n = c.link ? byName.get(c.link.normalize("NFC")) : undefined;
+    const { data, body } = n ? frontmatter(n.text) : { data: {} as Record<string, string | string[]>, body: "" };
+    const text = body.trim();
+    return {
+      name: c.name, category: c.stage, summary: c.desc || String(data.summary ?? firstLine(text)), aliases: toList(data.aliases), related: [],
+      markdown: "", body: text, examples: [], file: n?.file ?? "", stub: !n, meta: { status: c.status }, tasks: n ? tasksOf(body) : [],
+      order: i, concept: c,
+    };
+  });
+}
+
+// 공부 카드: 개념 노트의 칸들을 모든 개념에 같은 5단계 순서로 다시 배치.
+// ① 목표 → ② 읽고 이해하기 → ③ 예측하고 직접 해 보기 → ④ 문서를 닫고 설명하기 → ⑤ 완료 기준·증거
+export const STUDY_STEPS = ["목표 확인", "읽고 이해하기", "예측하고 직접 해 보기", "문서를 닫고 설명하기", "완료 기준 체크·증거 남기기"];
+export function studyCard(d: Doc): { md: string; taskMap: number[] } {
+  const c = d.concept!;
+  const lines = d.body.split("\n");
+  // 줄마다 노트 전체에서의 체크박스 순서 (코드 블록 제외, tasksOf와 같은 규칙)
+  const taskAt: number[] = [];
+  let fence = "", n = 0;
+  for (const l of lines) {
+    const f = l.trim().match(/^(```|~~~)/)?.[1];
+    if (f) { if (!fence) fence = f; else if (f === fence) fence = ""; taskAt.push(-1); continue; }
+    taskAt.push(!fence && TASK.test(l.replace(/\r$/, "")) ? n++ : -1);
+  }
+  type Sec = { title: string; from: number; to: number };
+  const secs: Sec[] = [];
+  lines.forEach((l, i) => { if (/^##\s/.test(l)) { if (secs.length) secs[secs.length - 1].to = i; secs.push({ title: l.replace(/^##\s+/, ""), from: i + 1, to: lines.length }); } });
+  const pick = (re: RegExp) => secs.filter(x => re.test(x.title));
+  const taskMap: number[] = [];
+  // 칸 내용 꺼내기. tasks: "only"면 체크박스 줄만, "skip"이면 체크박스 줄 빼고
+  const take = (ss: Sec[], tasks: "all" | "only" | "skip" = "all", label = false) => ss.map(x => {
+    const out: string[] = [];
+    for (let i = x.from; i < x.to; i++) {
+      const isTask = taskAt[i] >= 0;
+      if ((tasks === "only" && !isTask) || (tasks === "skip" && isTask)) continue;
+      if (isTask) taskMap.push(taskAt[i]);
+      out.push(lines[i].replace(/^#{3,6}\s+(.*)$/, "**$1**"));
+    }
+    const t = out.join("\n").trim();
+    const name = `**${x.title.replace(/[:|·].*$/, "").trim()}**`;
+    return t && label ? (/^(-|\d+\.|```|>|\|)/.test(t) ? `${name}\n\n${t}` : `${name} — ${t}`) : t;
+  }).filter(Boolean).join("\n\n");
+  // "- **목표**: …" 줄이 있으면 그 줄만 (위치·선행 안내는 목록에 이미 보임)
+  const goalOnly = (t: string) => t.split("\n").some(l => /\*\*목표\*\*/.test(l)) ? t.split("\n").filter(l => /\*\*목표\*\*/.test(l)).join("\n") : t;
+  const step = (i: number, body: string, hint: string) => `#### ${"①②③④⑤"[i]} ${STUDY_STEPS[i]}\n\n${body || `> ${hint}`}`;
+  if (!d.file) {
+    return { taskMap, md: [
+      `**${c.name}** — ${c.desc || c.stage}`,
+      "> 이 개념은 아직 노트가 없어요. **Enter**로 개념 노트를 만들고, 아래 순서로 채우면서 공부하세요.",
+      ...STUDY_STEPS.map((s, i) => `${"①②③④⑤"[i]} ${s}`),
+    ].join("\n\n") };
+  }
+  const read = pick(/^(What|Why|How|Structure|History)\b/);
+  const md = [
+    step(0, goalOnly(take(pick(/목표/), "skip")), "이 개념으로 무엇을 할 수 있어야 하는지 한 줄로 적어 보세요."),
+    step(1, [take(read, "skip", read.length > 1), take(pick(/자료|더 읽기/))].filter(Boolean).join("\n\n"),
+      "공식 문서나 강의에서 정의·필요한 이유·동작 원리를 찾아 읽으세요."),
+    step(2, [take(pick(/^(Syntax|Example|Code)\b/), "skip"), take(pick(/^Practice\b/), "skip"), take(pick(/^Debugging\b/), "skip", true)].filter(Boolean).join("\n\n"),
+      "결과를 먼저 예측해 적고, 직접 실행해서 맞는지 확인하세요."),
+    step(3, take(pick(/^Explain\b/), "skip"), "노트를 닫고 60초 동안 문제 → 동작 → 실패하는 경우 순서로 말해 보세요."),
+    step(4, take(pick(/^Explain\b|완료 기준/), "only"), "실습 결과·커밋·스크린샷 중 하나를 증거로 남기세요."),
+    "> ⌘N 이 개념 노트에 배운 점·막힌 점 기록 · ⌘D 상태 바꾸기 · ⌘O 노트 전체 열기",
+  ].join("\n\n");
+  return { md: toMarkdown(md, new Map()), taskMap };
 }

@@ -6,7 +6,7 @@ import {
   query, fileItems, storeItems, homeItems, aiItem, notesAiItem, iconFor, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry,
 } from "./commands";
-import { loadDocs, rank, byCategory, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
+import { loadDocs, rank, byCategory, byStage, nextUp, conceptsOf, conceptDocs, studyCard, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
 import { ICONS } from "./icons";
 import { NoteGraph, linkInfo } from "./graph";
 
@@ -86,9 +86,14 @@ type Hk = { keys: Record<string, string>; recording: string | null; error: strin
 // 비밀번호 모음: 수정(doc 있음) 또는 새 노트 추가(doc 없음)
 type PwDraft = { doc: Doc | null; name: string; title: string; password: string; error: string | null; saving: boolean };
 const MASK = "••••••••";
-// 커리큘럼 상태: 머리말 status 값 → 표시 이름, ⌘D로 다음 상태
-const STATUS: Record<string, string> = { todo: "할 일", doing: "진행 중", "in-progress": "진행 중", done: "완료" };
-const nextStatus = (s: string) => s === "todo" || !s ? "doing" : s === "done" ? "todo" : "done";
+// 커리큘럼 상태: 머리말 status 값 → 표시 이름, ⌘D로 다음 상태. 허브 단계는 학습 전 → 학습 중 → 복습 필요 → 완료
+const STATUS: Record<string, string> = { todo: "할 일", doing: "진행 중", "in-progress": "진행 중", done: "완료",
+  "학습 전": "학습 전", "학습 중": "학습 중", "복습 필요": "복습 필요", "완료": "완료" };
+const HUB_STATES = ["학습 전", "학습 중", "복습 필요", "완료"];
+const nextStatus = (s: string) => HUB_STATES.includes(s) ? HUB_STATES[(HUB_STATES.indexOf(s) + 1) % 4]
+  : s === "todo" || !s ? "doing" : s === "done" ? "todo" : "done";
+const isDone = (s: string) => s === "done" || s === "완료";
+const isDoing = (s: string) => ["진행 중", "학습 중", "복습 필요"].includes(STATUS[s]);
 const weekLabel = (w?: string) => !w ? "" : /^[\d\s~-]+$/.test(w) ? `${w.replace(/-/g, "~")}주` : w;
 // 노트 검색별로 읽은 노트 (창을 다시 열 때 바로 보여 주기용). sig: 내용이 바뀌었는지 비교
 const docCache = new Map<string, { docs: Doc[]; sig: string }>();
@@ -194,6 +199,10 @@ export default function App() {
   const [pinned, setPinned] = useState(false); // 창 고정: 다른 앱을 눌러도 화면에 남음
   const togglePin = () => invoke<boolean>("set_pinned", { on: !pinned }).then(setPinned);
   const [exDoc, setExDoc] = useState<{ doc: Doc; prevQ: string } | null>(null); // 예시 고르기 대상
+  // 커리큘럼 단계 안의 개념 목록 (Enter로 들어가고 Esc로 단계 목록으로)
+  const [conc, setConc] = useState<{ stage: Doc; docs: Doc[]; loading: boolean; error: string | null; prevQ: string; prevSel: number } | null>(null);
+  const restoreSel = useRef<number | null>(null);
+  useEffect(() => { if (mode !== "note" && mode !== "memo") setConc(null); }, [mode]);
   const [reveal, setReveal] = useState(false); // 비밀번호 모음: 비밀번호 보이기 (⌘R)
   const [pw, setPw] = useState<PwDraft | null>(null);
   const [graph, setGraph] = useState(false); // 노트 검색을 그래프로 보기 (⌘G)
@@ -264,7 +273,7 @@ export default function App() {
     if (!search) search = (await loadConfig()).note_searches.find(n => n.id === id);
     if (!search) return;
     enter("note");
-    setGraph(asGraph); setPick(null); setReveal(false); setLocal(0);
+    setGraph(asGraph); setPick(null); setReveal(false); setLocal(0); setConc(null);
     // 전에 읽은 노트가 있으면 바로 보여 주고, 뒤에서 다시 읽어 바뀐 경우에만 갱신 (외장 디스크 첫 읽기 몇 초)
     const cached = docCache.get(id);
     setNotes({ search, docs: cached?.docs ?? [], loading: !cached, error: null });
@@ -286,9 +295,32 @@ export default function App() {
     const docs = await loadDocs(s);
     docCache.set(s.id, { docs, sig: docsSig(docs) });
     setNotes(n => n.search?.id === s.id ? { ...n, docs } : n);
+    // 개념 목록을 보고 있으면 그 단계와 개념도 새로
+    if (conc) {
+      const stage = docs.find(d => d.file === conc.stage.file && d.heading === conc.stage.heading) ?? conc.stage;
+      const cd = await conceptDocs(s, stage);
+      setConc(c => c && c.stage.file === stage.file && c.stage.heading === stage.heading ? { ...c, stage, docs: cd } : c);
+    }
   };
+  // 단계 → 개념 목록
+  const openConcepts = (stage: Doc, focus?: number) => {
+    const s = notes.search;
+    if (!s) return;
+    setConc({ stage, docs: [], loading: true, error: null, prevQ: q, prevSel: sel });
+    setQ(""); setSel(0); setMenu(false);
+    conceptDocs(s, stage)
+      .then(docs => { setConc(c => c?.stage === stage ? { ...c, docs, loading: false } : c);
+        const i = focus === undefined ? -1 : docs.findIndex(d => d.concept?.hubIndex === focus);
+        if (i >= 0) setSel(i); })
+      .catch(e => setConc(c => c?.stage === stage ? { ...c, loading: false, error: String(e) } : c));
+  };
+  const setConceptStatus = (d: Doc, value: string) => invoke("note_task_state",
+    { id: notes.search!.id, file: d.concept!.hubFile, index: d.concept!.hubIndex, text: d.concept!.hubText, value })
+    .then(reloadDocs).catch(failNote("상태를 바꾸지 못했어요"));
   const failNote = (title: string) => (e: unknown) => { setAi(null); setView({ kind: "text", title, text: String(e), error: true }); };
-  const setStatus = (d: Doc, value: string) => invoke("note_set_field", { id: notes.search!.id, file: d.file, key: "status", value })
+  const setStatus = (d: Doc, value: string) => (d.heading
+    ? invoke("note_stage_status", { id: notes.search!.id, file: d.file, heading: d.heading, value })
+    : invoke("note_set_field", { id: notes.search!.id, file: d.file, key: "status", value }))
     .then(reloadDocs).catch(failNote("상태를 바꾸지 못했어요"));
   // 커리큘럼 미리보기의 체크박스 클릭 → 노트 파일에 체크/해제
   const onPreviewClick = (e: MouseEvent<HTMLElement>) => {
@@ -296,9 +328,11 @@ export default function App() {
     if (!(el instanceof HTMLInputElement) || el.type !== "checkbox" || notes.search?.kind !== "curriculum" || !curDoc?.tasks) return;
     e.preventDefault(); // 화면은 파일을 고친 뒤 다시 읽어서 바꿈
     const boxes = Array.from(e.currentTarget.querySelectorAll("input[type=checkbox]"));
-    const i = boxes.indexOf(el), task = curDoc.tasks[i];
-    if (!task || boxes.length !== curDoc.tasks.length) return;
-    invoke("note_toggle_task", { id: notes.search.id, file: curDoc.file, index: i, text: task.text, done: !task.done })
+    // 공부 카드는 노트의 일부 체크박스만 보여 주므로 taskMap으로 노트 전체 순서를 찾음
+    const map = curDoc.concept ? card?.taskMap : undefined;
+    const i = boxes.indexOf(el), k = map ? map[i] : i, task = curDoc.tasks[k];
+    if (!task || boxes.length !== (map ? map.length : curDoc.tasks.length)) return;
+    invoke("note_toggle_task", { id: notes.search.id, file: curDoc.file, index: (curDoc.taskBase ?? 0) + k, text: task.text, done: !task.done })
       .then(reloadDocs).catch(failNote("체크하지 못했어요"));
   };
   const loadClips = () => Promise.all([invoke<Clip[]>("clip_list"), invoke<boolean>("clip_enabled")])
@@ -340,9 +374,10 @@ export default function App() {
       for (const s of getConfig().note_searches.filter(n => n.kind === "curriculum")) {
         let docs = docCache.get(s.id)?.docs;
         if (!docs) { docs = await loadDocs(s).catch(() => [] as Doc[]); docCache.set(s.id, { docs, sig: docsSig(docs) }); }
-        const stages = docs.filter(d => !d.aliases.includes("moc")).sort((a, b) => a.file.localeCompare(b.file, undefined, { numeric: true }));
-        const doc = stages.find(d => STATUS[d.meta.status] === "진행 중") ?? stages.find(d => d.meta.status !== "done");
-        if (doc) { setMemo(m => ({ ...m, stage: { search: s, doc }, finding: false })); return; }
+        // 허브 단계는 연결된 단계 노트에 기록 (없으면 건너뜀)
+        const stages = docs.filter(d => !d.aliases.includes("moc") && (!d.heading || d.record)).sort(byStage);
+        const doc = stages.find(d => isDoing(d.meta.status)) ?? stages.find(d => !isDone(d.meta.status));
+        if (doc) { setMemo(m => ({ ...m, stage: { search: s, doc: doc.record ?? doc }, finding: false })); return; }
       }
       setMemo(m => ({ ...m, finding: false }));
     })();
@@ -353,8 +388,12 @@ export default function App() {
     docCache.delete(st.search.id);
     if (notes.search?.id === st.search.id) reloadDocs();
     loadDocs(st.search).then(docs => {
-      const doc = docs.find(d => d.file === st.doc.file);
+      const doc = docs.map(d => d.record ?? d).find(d => d.file === st.doc.file);
       if (doc) setMemo(m => m.stage?.doc.file === doc.file ? { ...m, stage: { ...m.stage, doc } } : m);
+      else if (conc) conceptDocs(st.search, conc.stage).then(cd => { // 개념 노트에 기록한 경우
+        const d = cd.find(x => x.file === st.doc.file);
+        if (d) setMemo(m => m.stage?.doc.file === d.file ? { ...m, stage: { ...m.stage, doc: d } } : m);
+      });
     }).catch(() => {});
   };
   // 기록 지우기 (×를 두 번). 지운 내용은 ⌘Z로 되돌릴 수 있게 보관
@@ -521,10 +560,21 @@ export default function App() {
 
   // 노트 검색: 검색어가 없으면 분류(폴더)별 전체, 있으면 점수순
   const noteList = useMemo(
-    () => mode === "note" ? (q.trim() ? rank(notes.docs, q).slice(0, 80)
-      : notes.search?.kind === "curriculum" ? [...notes.docs].sort((a, b) => a.file.localeCompare(b.file, undefined, { numeric: true }))
+    () => mode === "note" && conc ? conc.docs.filter(d => !q.trim() || `${d.name} ${d.summary}`.toLowerCase().includes(q.trim().toLowerCase()))
+      : mode === "note" ? (q.trim() ? rank(notes.docs, q).slice(0, 80)
+      : notes.search?.kind === "curriculum" ? [...nextUp(notes.docs), ...[...notes.docs].sort(byStage)]
       : byCategory(notes.docs)) : [],
-    [mode, notes.docs, q, notes.search?.kind]);
+    [mode, notes.docs, q, notes.search?.kind, conc]);
+  // 분야별 진행: 허브 단계의 체크박스(개념) 완료 수
+  const fieldDone = useMemo(() => {
+    const m = new Map<string, [number, number]>();
+    for (const d of notes.docs) if (d.heading) {
+      const [a, b] = m.get(d.category) ?? [0, 0], t = d.tasks ?? [];
+      m.set(d.category, [a + t.filter(x => x.done).length, b + t.length]);
+    }
+    return m;
+  }, [notes.docs]);
+  const fieldLabel = (f: string) => { const p = fieldDone.get(f); return p && p[1] ? `${f} · 개념 ${p[0]}/${p[1]} 완료` : f; };
   const noteItem = (d: Doc): Item => {
     const kind = notes.search?.kind ?? "notes";
     const obsidian: Action = { title: "Obsidian에서 열기", shortcut: "⌘O",
@@ -542,13 +592,41 @@ export default function App() {
           obsidian, finder,
         ] };
     }
+    if (d.concept) {
+      const c = d.concept, st = c.status, next = nextStatus(st || "학습 전");
+      const make: Action = { title: "개념 노트 만들기", keep: true, run: async () => {
+        await createConcept(conc?.stage.record ?? conc?.stage ?? d, c.link || c.name); await reloadDocs(); } };
+      return { id: `c-${c.hubIndex}-${c.name}`, title: d.name, kind: "wiki", section: q.trim() ? undefined : c.stage,
+        glyph: !d.file ? "doc" : isDone(st) ? "done" : isDoing(st) ? "doing" : "todo",
+        subtitle: [st, c.priority, !d.file ? "노트 없음" : ""].filter(Boolean).join(" · ") || c.desc.slice(0, 40),
+        actions: d.file ? [
+          { title: "Obsidian에서 열기", shortcut: "⌘O", run: () => openObsidian(d.file) },
+          { title: "이 개념에 기록하기", shortcut: "⌘N", keep: true, run: async () => openMemo({ search: notes.search!, doc: d }, "note") },
+          ...(c.hubIndex >= 0 ? [{ title: `상태를 "${next}"(으)로`, shortcut: "⌘D", keep: true, run: () => setConceptStatus(d, next) }] : []),
+          { title: "이름 복사", run: () => copy(d.name) },
+        ] : [make, { title: "이름 복사", run: () => copy(c.name) }] };
+    }
+    if (d.next) {
+      const c = d.next.concept;
+      return { id: `next-${d.category}`, title: c.name, kind: "wiki", glyph: c.status === "학습 중" ? "doing" : "todo", section: "다음 할 일",
+        subtitle: [d.category, d.name, c.hubIndex < 0 ? `개념 ${conceptsOf(d).length}개` : "", d.next.why].filter(Boolean).join(" · "),
+        actions: [{ title: "공부 카드 열기", keep: true, run: async () => openConcepts(d, c.hubIndex) },
+          c.hubIndex >= 0 ? { title: `상태를 "${nextStatus(c.status || "학습 전")}"(으)로`, shortcut: "⌘D", keep: true,
+            run: () => setConceptStatus({ ...d, concept: c }, nextStatus(c.status || "학습 전")) }
+            : { title: `단계 상태를 "${STATUS[nextStatus(d.meta.status || "학습 전")] ?? nextStatus(d.meta.status || "학습 전")}"(으)로`, shortcut: "⌘D", keep: true,
+              run: () => setStatus(d, nextStatus(d.meta.status || "학습 전")) },
+          { title: "이름 복사", run: () => copy(c.name) }] };
+    }
     if (kind === "curriculum") {
       const tasks = d.tasks ?? [], n = tasks.filter(x => x.done).length, st = d.meta.status || "todo", next = nextStatus(st);
-      return { id: `n-${d.file}`, title: d.name, kind: "wiki",
-        glyph: st === "done" ? "done" : STATUS[st] === "진행 중" ? "doing" : "todo",
-        subtitle: [STATUS[st] ?? st, weekLabel(d.meta.week), tasks.length ? `${n}/${tasks.length}` : ""].filter(Boolean).join(" · "),
-        actions: [obsidian, { title: "이 단계에 기록하기", shortcut: "⌘N", keep: true, run: async () => openMemo({ search: notes.search!, doc: d }, "note") },
+      const rec = d.heading ? d.record : d; // 허브 단계: 기록은 연결된 단계 노트에
+      return { id: `n-${d.file}#${d.heading ?? ""}`, title: d.name, kind: "wiki", section: d.heading && !q.trim() ? fieldLabel(d.category) : undefined,
+        glyph: isDone(st) ? "done" : isDoing(st) ? "doing" : "todo",
+        subtitle: [STATUS[st] ?? st, weekLabel(d.meta.week) || d.meta.hours, tasks.length ? `${n}/${tasks.length}` : "", q.trim() && d.heading ? d.category : ""].filter(Boolean).join(" · "),
+        actions: [...(d.heading && conceptsOf(d).length ? [{ title: `개념 ${conceptsOf(d).length}개 보기`, keep: true, run: async () => openConcepts(d) }] : []), obsidian,
+          ...(rec ? [{ title: "이 단계에 기록하기", shortcut: "⌘N", keep: true, run: async () => openMemo({ search: notes.search!, doc: rec }, "note") }] : []),
           { title: `상태를 "${STATUS[next]}"(으)로`, shortcut: "⌘D", keep: true, run: () => setStatus(d, next) },
+          ...(d.heading && d.record ? [{ title: "단계 노트 열기", run: () => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.record!.file)}` }) }] : []),
           finder, { title: "이름 복사", run: () => copy(d.name) }] };
     }
     const pick = kind === "commands" ? "예시 골라서 쓰기" : "코드 골라서 쓰기";
@@ -631,12 +709,16 @@ export default function App() {
   const sizeKind = graphOn ? "graph" : ai || mode === "note" || mode === "memo" || mode === "clip" ? "wide" : "normal";
   useEffect(() => { invoke("set_view", { kind: sizeKind }); }, [sizeKind]);
   const curClip = mode === "clip" ? clips.list.find(c => `clip-${c.at}` === items[sel]?.id) : undefined;
-  const curDoc = mode === "note" ? (graphOn && pick ? pick : noteList[sel]) : undefined;
+  // 커리큘럼 허브: 그래프에는 단계 대신 연결된 단계 노트를 보여 주고, 고르면 허브 단계로
+  const hubMode = notes.docs.some(d => d.heading);
+  const graphDocs = useMemo(() => hubMode ? notes.docs.flatMap(d => d.record ? [d.record] : []) : notes.docs, [notes.docs, hubMode]);
+  const curDoc: Doc | undefined = mode === "note" ? (graphOn && pick ? (notes.docs.find(d => d.record?.file === pick.file) ?? pick) : noteList[sel]) : undefined;
+  const card = useMemo(() => curDoc?.concept ? studyCard(curDoc) : null, [curDoc]);
   // 미리보기: 가는·오는 링크, 아직 없는 링크 (비밀번호 모음 제외)
   const linksOn = mode === "note" && notes.search?.kind !== "passwords";
   const links = useMemo(() => linksOn ? linkInfo(notes.docs) : null, [linksOn, notes.docs]);
   const curLinks = curDoc && links?.get(curDoc.file);
-  const graphMatches = useMemo(() => graphOn && q.trim() ? new Set(noteList.map(d => d.file)) : null, [graphOn, q, noteList]);
+  const graphMatches = useMemo(() => graphOn && q.trim() ? new Set(noteList.map(d => (d.record ?? d).file)) : null, [graphOn, q, noteList]);
   // 빠른 메모 오른쪽: 단계의 "내 기록" 세 칸과 오늘 Daily 메모 (칸마다 최근 6개)
   const memoSel = mode === "memo" ? items[sel]?.id ?? "" : "";
   useEffect(() => { if (mode === "memo" && memoSel && memoSel !== "memo-shot") memoDest.current = sel; }, [mode, memoSel, sel]);
@@ -672,16 +754,25 @@ export default function App() {
         curDoc.meta.ssh ? `**접속** \`${curDoc.meta.ssh}\`` : ""].filter(Boolean).join("  \n");
       if (info) md = `> ${info.replace(/\n/g, "\n> ")}\n\n${md}`;
     }
+    // 개념: 공부 카드 (진도는 카드에 보이는 완료 기준 기준)
+    if (curDoc.concept && card) {
+      const c = curDoc.concept, tasks = card.taskMap.map(k => curDoc.tasks?.[k]).filter(Boolean), n = tasks.filter(x => x!.done).length;
+      const info = [c.status ? `**상태** ${c.status}` : "", c.priority, c.prereq && c.prereq !== "없음" ? `**선행** ${c.prereq}` : "",
+        tasks.length ? `**완료 기준** ${n}/${tasks.length}` : "", `${c.stage}`].filter(Boolean).join(" · ");
+      const bar = tasks.length ? `<progress value="${n}" max="${tasks.length}"></progress>\n\n` : "";
+      return bar + (marked.parse(`> ${info}\n\n### ${curDoc.name}\n\n${card.md}`, { async: false }) as string)
+        .replace(/<input disabled="" type="checkbox"/g, '<input type="checkbox"').replace(/<input checked="" disabled="" type="checkbox"/g, '<input checked="" type="checkbox"');
+    }
     if (notes.search?.kind === "curriculum") {
       const tasks = curDoc.tasks ?? [], n = tasks.filter(x => x.done).length, st = curDoc.meta.status || "todo";
       const info = [tasks.length ? `**진도** ${n}/${tasks.length} (${Math.round(n / tasks.length * 100)}%)` : "",
-        `**상태** ${STATUS[st] ?? st}`, curDoc.meta.week ? `**기간** ${weekLabel(curDoc.meta.week)}` : ""].filter(Boolean).join(" · ");
+        `**상태** ${STATUS[st] ?? st}`, curDoc.meta.week ? `**기간** ${weekLabel(curDoc.meta.week)}` : curDoc.meta.hours ? `**시간** ${curDoc.meta.hours}` : ""].filter(Boolean).join(" · ");
       const bar = tasks.length ? `<progress value="${n}" max="${tasks.length}"></progress>\n\n` : "";
       return bar + (marked.parse(`> ${info}\n\n${md}`, { async: false }) as string).replace(/<input disabled="" type="checkbox"/g, '<input type="checkbox"')
         .replace(/<input checked="" disabled="" type="checkbox"/g, '<input checked="" type="checkbox"');
     }
     return marked.parse(md, { async: false }) as string;
-  }, [curDoc, reveal, notes.search?.kind]);
+  }, [curDoc, card, reveal, notes.search?.kind]);
 
   // 단축키로 열렸을 때: 기능에 맞는 화면으로 전환
   const onShown = (action: string) => {
@@ -738,7 +829,7 @@ export default function App() {
   useEffect(() => {
     const id = ++seq.current;
     setMenu(false); setPending(null); setPick(null);
-    if (mode !== "memo") setSel(0);
+    if (mode !== "memo") { setSel(restoreSel.current ?? 0); restoreSel.current = null; }
     else if (memo.stage && /^\s*!/.test(q)) setSel(1); // 막힌 점과 해결
     else if (memo.stage && /^\s*\$/.test(q)) setSel(2); // 사용한 명령어
     else if (q.trim()) setSel(s => s > 3 ? 0 : s); // 클립보드 칸에 있다가 입력을 시작하면 (그 칸이 사라지므로) 첫 칸으로
@@ -778,7 +869,7 @@ export default function App() {
     setAi(null);
     setView(msg.startsWith("PERM:") ? { kind: "perm", perm: msg.slice(5) } : { kind: "text", title: "실행하지 못했어요", text: msg, error: true });
   };
-  const cur = graphOn && pick ? noteItem(pick) : items[sel];
+  const cur = graphOn && pick ? noteItem(curDoc ?? pick) : items[sel];
   const run = (a?: Action, it: Item | undefined = cur) => {
     if (!a || !it) return;
     const key = `${it.id}:${a.title}`;
@@ -789,6 +880,7 @@ export default function App() {
   };
   const back = () => {
     if (mode === "examples") { setMode("note"); setQ(exDoc?.prevQ ?? ""); }
+    else if (mode === "note" && conc && !graphOn) { restoreSel.current = conc.prevSel; setSel(conc.prevSel); setQ(conc.prevQ); setConc(null); }
     else if (graphOn) { setGraph(false); setPick(null); }
     else if (mode === "memo" && memo.from) setMode(memo.from); // 커리큘럼에서 왔으면 그 화면으로
     else setMode(null);
@@ -867,7 +959,7 @@ export default function App() {
     // ⌘R: 비밀번호 보이기·가리기
     if (mode === "note" && notes.search?.kind === "passwords" && e.metaKey && e.code === "KeyR") { e.preventDefault(); setReveal(v => !v); return; }
     // ⌘G: 노트 목록 ↔ 그래프
-    if (mode === "note" && e.metaKey && e.code === "KeyG") { e.preventDefault(); setGraph(v => !v); setPick(null); setMenu(false); return; }
+    if (mode === "note" && !conc && e.metaKey && e.code === "KeyG") { e.preventDefault(); setGraph(v => !v); setPick(null); setMenu(false); return; }
     // ⌘L: 로컬 그래프 끔 → 1단계 → 2단계 → 끔
     if (graphOn && e.metaKey && e.code === "KeyL") { e.preventDefault(); setLocal(v => (v + 1) % 3); setMenu(false); return; }
     // ⌥+방향키(이웃 노트로 이동)와 ⌘0(맞춤)은 그래프가 처리
@@ -915,10 +1007,11 @@ export default function App() {
     : hk.recording ? [["취소", ["esc"]]]
     : cur ? [[cur.actions[0].title, ["↵"]], ...(quick ? [[quick.title, [...quick.shortcut!]] as [string, string[]]] : []),
       ...(mode === "note" && notes.search?.kind === "passwords" ? [[reveal ? "가리기" : "보기", ["⌘", "R"]] as [string, string[]]] : []),
-      ...(mode === "note" ? [[graph ? "목록" : "그래프", ["⌘", "G"]] as [string, string[]]] : []),
+      ...(mode === "note" && !conc ? [[graph ? "목록" : "그래프", ["⌘", "G"]] as [string, string[]]] : []),
       ...(graphOn ? [[local ? `로컬 ${local}단계` : "로컬", ["⌘", "L"]] as [string, string[]]] : []), ["액션", ["⌘", "K"]]] : [];
   const placeholder = ai ? "다시 물어보기"
     : mode === "store" ? "확장 검색"
+    : mode === "note" && conc ? `${conc.stage.name} · 개념 검색`
     : mode === "note" ? (notes.search?.kind === "commands" ? "명령어 또는 하고 싶은 작업 (예: 포트 확인, 권한 변경)" : `${notes.search?.name ?? "노트"} 검색`)
     : mode === "noteManage" ? "노트 검색 관리"
     : mode === "examples" ? `${exDoc?.doc.name ?? ""} 예시 검색`
@@ -933,9 +1026,11 @@ export default function App() {
     : mode === "files" ? (found.loading ? "찾는 중…" : q.trim() ? `파일 ${found.items.length}개` : "파일 이름을 입력하세요 · Enter로 Finder에서 보기")
     : mode === "clip" ? (q.trim() ? `찾은 기록 ${items.filter(i => i.id.startsWith("clip-") && !["clip-toggle", "clip-clear"].includes(i.id)).length}개` : clips.enabled ? null : "기록을 멈춘 상태예요")
     : mode === "memo" ? (memo.shot ? `스크린샷 붙임 · 저장 이름: ${now().date}-${shotName(q.replace(/^\s*[!$]/, ""))}` : memo.saved ? `✓ ${memo.saved}` : memo.finding ? "공부 중인 단계 찾는 중…" : memo.stage ? `지금 단계: ${memo.stage.doc.name}` : "공부 중인 커리큘럼 단계가 없어 Daily에 적어요")
+    : mode === "note" && conc ? (conc.loading ? "개념 노트 불러오는 중…" : `${conc.stage.category} · ${conc.stage.name} · 개념 ${conc.docs.length}개 · Esc 단계 목록`)
     : mode === "note" && (notes.loading || q.trim()) ? (notes.loading ? "노트 불러오는 중…" : `검색 결과 ${noteList.length}개`)
     : null;
   const empty = mode === "store" ? store.error
+    : mode === "note" && conc ? conc.error ?? (!conc.loading && !items.length ? (q ? "일치하는 개념이 없어요." : "이 단계에는 개념 목록이 없어요.") : null)
     : mode === "note" ? notes.error ?? (!notes.loading && !items.length ? (q ? "일치하는 노트가 없어요." : "폴더에 노트(.md)가 없어요.") : null)
     : mode === "hotkeys" ? hk.error
     : mode === "files" ? (q.trim() && !found.loading && !found.items.length ? "일치하는 파일이 없어요." : null)
@@ -1068,7 +1163,7 @@ export default function App() {
       ) : graphOn ? (
         // 노트 그래프: 왼쪽 그래프 + 오른쪽 미리보기. 검색어는 맞는 노트만 진하게
         <div className="split">
-          <NoteGraph docs={notes.docs} matches={graphMatches} selected={curDoc} loading={notes.loading} cacheKey={notes.search?.id ?? ""} local={local}
+          <NoteGraph docs={graphDocs} matches={graphMatches} selected={curDoc?.record ?? curDoc} loading={notes.loading} cacheKey={notes.search?.id ?? ""} local={local}
             onSelect={d => { setPick(d); setMenu(false); }}
             onOpen={d => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` })} />
           <div className="preview" key={curDoc?.file /* 다른 노트로 바뀌면 맨 위부터 */}>
