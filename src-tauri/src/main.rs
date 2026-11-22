@@ -780,6 +780,17 @@ fn main() {
             get_hotkeys, set_hotkey, suspend_hotkeys,
             notes_load, note_set_field, note_toggle_task, note_stage_status, note_task_state, notes_named, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
-        .run(tauri::generate_context!())
-        .expect("Baro 실행 실패");
+        .build(tauri::generate_context!())
+        .expect("Baro 실행 실패")
+        .run(|app, e| {
+            // 이미 켜진 Baro를 다시 열면(open -a Baro, Finder·Dock) 창을 띄움. 단축키 없이도 열 수 있게
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = e {
+                if let Some(w) = app.get_webview_window("main") {
+                    if !w.is_visible().unwrap_or(false) { toggle(&w, "baro"); }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, e);
+        });
 }
