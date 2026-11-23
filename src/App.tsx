@@ -285,6 +285,16 @@ export default function App() {
   // 기록 고치기 (✎): 그 항목 글을 입력칸에 불러오고, Enter로 같은 자리에 덮어씀
   const recordsOf = (sec: string) => sec === "daily" ? itemsOf(dailyRaw(memo.daily ?? "")) : itemsOf(sectionRaw(memo.stage?.doc.body ?? "", sec));
   const startEdit = (sec: string, i: number) => {
+    // 완료 기준 증거("crit:기준번호"): 앞 날짜는 떼어 두고 글만 불러옴
+    if (sec.startsWith("crit:")) {
+      const ev = crit[Number(sec.slice(5))]?.evidence[i];
+      if (ev === undefined) return;
+      const m = ev.match(/^(\d{4}-\d\d-\d\d) ?([\s\S]*)$/);
+      setDelPending(null); setEditing({ sec, i, first: ev.split("\n")[0], time: m?.[1] }); setQ(m ? m[2] : ev); setSel(0);
+      setMemo(m => ({ ...m, saved: null, error: null }));
+      requestAnimationFrame(() => input.current?.focus());
+      return;
+    }
     const item = recordsOf(sec)[i];
     if (!item) return;
     const { text, time } = editTextOf(item, sec);
@@ -296,6 +306,14 @@ export default function App() {
   const saveEdit = async () => {
     const ed = editing, st = memo.stage, daily = ed?.sec === "daily";
     if (!ed || !q.trim() || (!daily && !st)) return;
+    const c = ed.sec.startsWith("crit:") ? crit[Number(ed.sec.slice(5))] : null;
+    if (c && st) {
+      await invoke("note_edit_evidence", { id: st.search.id, file: st.doc.file, index: (st.doc.taskBase ?? 0) + c.index, text: c.text,
+        n: ed.i, first: ed.first, body: q, field: /재현/.test(c.label) ? c.label : null })
+        .then(() => { setEditing(null); setQ(""); setMemo(m => ({ ...m, saved: `${c.label} 증거를 고쳤어요`, error: null })); refreshStage(st); })
+        .catch(memoFail);
+      return;
+    }
     await invoke("memo_replace", { id: st?.search.id ?? "", file: st?.doc.file ?? "", date: memo.dailyDate ?? now().date,
       section: ed.sec, index: ed.i, first: ed.first, text: editBlockOf(ed.sec, q, ed.time) })
       .then(() => {
@@ -379,7 +397,8 @@ export default function App() {
     const text = pre ? raw.slice(1).trim() : raw;
     const st = memo.stage, short = st?.doc.name.split(":")[0] ?? "";
     if (editing) {
-      const where = editing.sec === "daily" ? "오늘 Daily" : `${short} · ${editing.sec}`;
+      const where = editing.sec === "daily" ? "오늘 Daily"
+        : editing.sec.startsWith("crit:") ? `${short} · ${crit[Number(editing.sec.slice(5))]?.label ?? ""} 증거` : `${short} · ${editing.sec}`;
       return [
         { id: "memo-edit-save", title: "고친 내용 저장", subtitle: `${where} · ${editing.i + 1}번째 기록 자리에 덮어써요`, kind: "wiki", glyph: "memo",
           actions: [{ title: "저장", keep: true, run: saveEdit }] },
@@ -658,11 +677,12 @@ export default function App() {
         }).join("") : `<p class="none">${sub}</p>`) + "</section>";
     };
     const st = memo.stage, body = st?.doc.body ?? "";
-    // 완료 기준 칸: 기준 설명과 지금까지 단 증거 (지우기는 Obsidian에서)
+    // 완료 기준 칸: 기준 설명과 지금까지 단 증거 (✎ 고치기, 지우기는 Obsidian에서)
     const critBox = (c: Criterion, i: number) => `<section class="rec${memoSel === `memo-crit-${i}` ? " on" : ""}"><h4>${c.label} <span>${c.done ? "✓ 체크됨" : "아직 체크 전"}${c.evidence.length ? ` · 증거 ${c.evidence.length}개` : ""}</span></h4>`
       + `<ol class="ask">${questionsOf(c).map(x => `<li>${marked.parseInline(x, { async: false }) as string}</li>`).join("")}</ol>`
       + (/재현/.test(c.label) ? `<p class="none">기록하면 체크·evidence·status·복습일은 자동으로 바뀌어요</p>` : "")
-      + c.evidence.slice(-6).map(e => `<div class="rec-item">${marked.parse(e, { async: false }) as string}</div>`).join("") + "</section>"
+      + c.evidence.map((e, n) => ({ e, n })).slice(-6).map(({ e, n }) => `<div class="rec-item${editing?.sec === `crit:${i}` && editing.i === n ? " editing" : ""}">${marked.parse(e, { async: false }) as string}`
+        + `<button class="rec-edit solo" data-sec="crit:${i}" data-i="${n}" title="고치기">✎</button></div>`).join("") + "</section>"
       + (memoSel === `memo-crit-${i}` && st ? hintBox((/검증/.test(c.label) && st.doc.expect
         ? `<details><summary>기대 관찰 (예측을 적은 뒤 펼치기)</summary>\n\n${st.doc.expect.see}\n\n**변형 도전** — ${st.doc.expect.vary}\n\n</details>\n\n` : "")
         + criterionHints(st.doc, c.label)) : "");

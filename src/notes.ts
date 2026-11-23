@@ -462,6 +462,7 @@ export function criteriaOf(d: Doc): Criterion[] {
     }
     if (cur && /^\s+[-*+]\s+/.test(l)) cur.evidence.push(l.replace(/^\s+[-*+]\s+/, ""));
     else if (cur && /^\s{3,}\S/.test(l) && cur.evidence.length) cur.evidence[cur.evidence.length - 1] += "\n" + l.trim();
+    else if (cur && /^\s{3,}$/.test(l) && cur.evidence.length) cur.evidence[cur.evidence.length - 1] += "\n"; // 증거 안 빈 줄 유지
     else if (cur && l.trim() && !/^\s/.test(l)) cur = null;
   }
   return out;

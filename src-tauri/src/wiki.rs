@@ -361,12 +361,64 @@ fn with_evidence(src: &str, index: usize, text: &str, date: &str, body: &str, fi
     while at < out.len() {
         let end = out[at..].find('\n').map(|k| at + k + 1).unwrap_or(out.len());
         let l = &out[at..end];
-        if l.trim().is_empty() || !l.starts_with(&format!("{indent} ")) && !l.starts_with(&format!("{indent}\t")) { break; }
+        if l.trim_end_matches(['\n', '\r']).is_empty() || !l.starts_with(&format!("{indent} ")) && !l.starts_with(&format!("{indent}\t")) { break; }
         at = end;
     }
     let tail = if at == out.len() && !out.ends_with('\n') { "\n" } else { "" };
     out.insert_str(at, &format!("{tail}{block}\n"));
     if let Some(name) = field { out = push_list(&out, "evidence", &format!("{date} {name}: {}", lines[a].trim())); }
+    Ok(out)
+}
+
+// 완료 기준 증거 고치기: index번째 체크박스 아래 n번째 증거(첫 줄 = first)를 body로 바꿈. 날짜는 그대로.
+// field가 있으면 머리말 evidence의 같은 항목("날짜 field: 첫 줄")도 새 첫 줄로
+pub fn edit_evidence(dir: &str, file: &str, index: usize, text: &str, n: usize, first: &str, body: &str, field: Option<&str>) -> Result<(), String> {
+    let f = inside(dir, file)?;
+    let src = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
+    let out = with_edited_evidence(&src, index, text, n, first, body, field)?;
+    write_atomic(&f, &out)
+}
+
+fn with_edited_evidence(src: &str, index: usize, text: &str, n: usize, first: &str, body: &str, field: Option<&str>) -> Result<String, String> {
+    let lines: Vec<&str> = body.lines().map(str::trim_end).collect();
+    let (Some(a), Some(b)) = (lines.iter().position(|l| !l.trim().is_empty()), lines.iter().rposition(|l| !l.trim().is_empty())) else {
+        return Err("고친 내용이 비어 있어요.".into());
+    };
+    let (off, len, _) = find_task(src, index, text)?;
+    let indent: String = src[off..].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+    // 기준 줄 다음의 더 들여쓴 줄들에서 증거 항목(- 로 시작) 범위를 찾음
+    let mut at = off + len;
+    if src[at..].starts_with('\n') { at += 1; } else { return Err("고칠 증거를 찾지 못했어요.".into()); }
+    let mut items: Vec<(usize, usize)> = vec![];
+    while at < src.len() {
+        let end = src[at..].find('\n').map(|k| at + k + 1).unwrap_or(src.len());
+        let l = &src[at..end];
+        if l.trim_end_matches(['\n', '\r']).is_empty() || !l.starts_with(&format!("{indent} ")) && !l.starts_with(&format!("{indent}\t")) { break; }
+        let tr = l.trim_start();
+        if tr.starts_with("- ") || tr.starts_with("* ") || tr.starts_with("+ ") { items.push((at, end)); }
+        else if !tr.trim().is_empty() { if let Some(last) = items.last_mut() { last.1 = end; } } // 공백뿐인 줄은 다음 내용 줄이 있을 때만 포함
+        at = end;
+    }
+    let &(s, e) = items.get(n).ok_or("고칠 증거를 찾지 못했어요. 목록을 다시 열어 주세요.")?;
+    let head = src[s..].split('\n').next().unwrap_or("").trim_end();
+    let old_first = head.trim_start()[2..].trim_start();
+    if old_first != first.trim() { return Err("노트 내용이 바뀌었어요. 목록을 다시 열어 주세요.".into()); }
+    let item_indent: String = head.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+    // 첫 줄 앞 날짜(YYYY-MM-DD)는 유지
+    let date = old_first.get(..10).filter(|d| d.chars().enumerate().all(|(i, c)| if i == 4 || i == 7 { c == '-' } else { c.is_ascii_digit() }));
+    let block = lines[a..=b].iter().enumerate()
+        .map(|(i, l)| if i == 0 { match date { Some(d) => format!("{item_indent}- {d} {}", l.trim_start()), None => format!("{item_indent}- {}", l.trim_start()) } }
+            else { format!("{item_indent}  {l}") })
+        .collect::<Vec<_>>().join("\n");
+    let nl = if src[s..e].ends_with('\n') { "\n" } else { "" };
+    let mut out = format!("{}{block}{nl}{}", &src[..s], &src[e..]);
+    if let (Some(name), Some(d)) = (field, date) {
+        let old = format!("  - {}", yaml_quote(&format!("{d} {name}: {}", old_first[10..].trim_start())));
+        let new = format!("  - {}", yaml_quote(&format!("{d} {name}: {}", lines[a].trim())));
+        if let Some(end) = out.starts_with("---\n").then(|| out[4..].find("\n---").map(|i| i + 4)).flatten() {
+            if let Some(i) = out[..end + 1].find(&format!("\n{old}\n")) { out.replace_range(i + 1..i + 1 + old.len(), &new); }
+        }
+    }
     Ok(out)
 }
 
@@ -534,6 +586,19 @@ pub fn restore_daily(vault: &str, date: &str, line: usize, block: &str) -> Resul
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn edit_evidence_keeps_date_and_field() {
+        let src = "---\nevidence:\n  - \"2026-11-23 독립 재현: 옛 첫 줄\"\n---\n\n- [x] **독립 재현**: 다시 구현\n  - 2026-11-23 옛 첫 줄\n    옛 둘째\n  - 2026-11-24 다른 증거\n- [ ] 다음\n";
+        let out = super::with_edited_evidence(src, 0, "**독립 재현**: 다시 구현", 0, "2026-11-23 옛 첫 줄", "새 첫 줄\n새 둘째", Some("독립 재현")).unwrap();
+        assert_eq!(out, "---\nevidence:\n  - \"2026-11-23 독립 재현: 새 첫 줄\"\n---\n\n- [x] **독립 재현**: 다시 구현\n  - 2026-11-23 새 첫 줄\n    새 둘째\n  - 2026-11-24 다른 증거\n- [ ] 다음\n");
+        let two = super::with_edited_evidence(src, 0, "**독립 재현**: 다시 구현", 1, "2026-11-24 다른 증거", "고침", None).unwrap();
+        assert!(two.contains("  - 2026-11-24 고침\n- [ ] 다음"));
+        assert!(super::with_edited_evidence(src, 0, "**독립 재현**: 다시 구현", 0, "다른 글", "x", None).is_err());
+        // 증거 안에 공백뿐인 줄(붙여넣은 출력의 빈 줄)이 있어도 항목 전체를 바꿈
+        let gap = "- [x] **재현**: a\n  - 2026-11-23 첫\n    \n    끝\n- [ ] b\n";
+        assert_eq!(super::with_edited_evidence(gap, 0, "**재현**: a", 0, "2026-11-23 첫", "새", None).unwrap(), "- [x] **재현**: a\n  - 2026-11-23 새\n- [ ] b\n");
+    }
+
     #[test]
     fn remove_and_restore_items() {
         let dir = std::env::temp_dir().join(format!("baro-rm-test-{}", std::process::id()));
