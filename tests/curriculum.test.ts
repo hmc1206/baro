@@ -193,3 +193,13 @@ test("evidencePlan: 끝낸 개념을 복습일에 기록하면 다음 간격(7 �
   assert.deepEqual(evidencePlan(c, c[1], doc("2026-12-21", "2026-11-30"), "2026-12-22"), { review: "2027-02-20" });
   assert.deepEqual(evidencePlan(c, c[1], doc("2026-12-21", "2026-11-30"), "2026-12-01"), {}); // 아직 복습일 전
 });
+
+test("공부 카드: 완료 기준에 단 증거는 ④가 아니라 ⑤의 그 기준 아래", () => {
+  const body = "# X\n\n## Explain · 학습 완료 기준\n- [x] **노트별 검증**: 결과를 설명한다.\n  - 2026-11-23 Server: 1.1.1.1\n    \n    Name: example.com\n- [ ] **말로 설명**: X를 60~90초로 설명했다. 무엇을 해결하는지 답한다.\n";
+  const c = conceptsOf(stages()[0])[0];
+  const { md, taskMap } = studyCard({ name: c.name, category: "", summary: "", aliases: [], related: [], markdown: "", body, examples: [], file: "/v/x.md",
+    stub: false, meta: {}, tasks: [], concept: c } as Doc);
+  const four = md.slice(md.indexOf("④"), md.indexOf("⑤")), five = md.slice(md.indexOf("⑤"));
+  assert.ok(!four.includes("Server") && five.includes("Server: 1.1.1.1") && five.includes("example.com"), md);
+  assert.deepEqual(taskMap, [0, 1]);
+});

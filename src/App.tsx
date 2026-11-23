@@ -9,6 +9,11 @@ import {
 import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, conceptsOf, conceptDocs, studyCard, criteriaOf, criterionHints, questionsOf, evidencePlan, Criterion, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
 import { ICONS } from "./icons";
 import { NoteGraph, linkInfo } from "./graph";
+import { PERMS, hotkeyLabels, fmtKey, accelOf } from "./app/keys";
+import type { Source, Ai, Store, Notes, Draft, Hk, PwDraft, Mode, Clip, Stage, Shot, Memo, Removed, RecItem } from "./app/types";
+import { STATUS, HUB_STATES, nextStatus, isDone, isDoing, weekLabel, docCache, docsSig, lastDoc } from "./app/status";
+import { MASK, nextName, newPwNote, today, baseOf } from "./app/passwords";
+import { clipDay, clipTime, RECORD, pad, ago, now, cmdBlock, listBlock, itemsOf, sectionRaw, dailyRaw, editTextOf, editBlockOf } from "./app/memo";
 
 function Icon({ it }: { it: Item }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -23,165 +28,6 @@ function Icon({ it }: { it: Item }) {
   return <span className={`icon glyph ${it.kind}`}>{Svg ? <Svg size={15} strokeWidth={2.2} /> : (it.glyph ?? it.title[0])}</span>;
 }
 
-// 권한별 안내 문구
-const PERMS: Record<string, { title: string; body: string }> = {
-  accessibility: {
-    title: "손쉬운 사용 권한이 필요해요",
-    body: "창 관리와 붙여넣기는 다른 앱의 창과 키보드를 제어해야 해서 이 권한이 필요해요.\n\n" +
-      "Enter를 누르면 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용 화면이 열려요. 목록에서 Baro를 켜 주세요. " +
-      "목록에 없으면 + 버튼으로 /Applications/Baro.app을 추가하세요.\n\n" +
-      "Baro를 새로 빌드해 설치하면 권한이 풀릴 수 있어요. 그때는 목록에서 Baro를 지웠다가 다시 추가하세요.",
-  },
-  automation: {
-    title: "자동화 권한이 필요해요",
-    body: "휴지통 비우기(Finder), 다크 모드 전환·창 관리·붙여넣기(System Events)는 다른 앱에 명령을 보내야 해서 이 권한이 필요해요.\n\n" +
-      "처음 실행할 때 macOS가 \"Baro가 Finder를 제어하려고 합니다\"라고 물으면 허용을 누르세요. 이미 거절했다면 " +
-      "Enter를 눌러 시스템 설정 → 개인정보 보호 및 보안 → 자동화에서 Baro 아래 항목을 켜 주세요.",
-  },
-  input: {
-    title: "입력 모니터링 권한이 필요해요",
-    body: "스니펫 자동 입력은 어느 앱에서든 ;키워드를 알아채야 해서 키 입력을 읽는 권한이 필요해요. " +
-      "입력한 글자는 저장하지 않고 마지막 40글자만 잠깐 비교하며, 비밀번호 칸에서는 macOS가 아예 넘겨주지 않아요.\n\n" +
-      "Enter를 누르면 시스템 설정 → 개인정보 보호 및 보안 → 입력 모니터링 화면이 열려요. 목록에서 Baro를 켠 뒤 " +
-      "\"스니펫 자동 입력 켜기\"를 다시 실행하세요. (켠 뒤에도 안 되면 Baro를 껐다 켜 주세요.)",
-  },
-  ok: {
-    title: "필요한 권한이 모두 있어요",
-    body: "손쉬운 사용: 허용됨\n자동화: 휴지통 비우기·다크 모드를 처음 쓸 때 macOS가 따로 물어봐요.",
-  },
-};
-
-// 단축키를 지정할 수 있는 기능: 고정 기능(Rust config.rs의 HOTKEY_ACTIONS) + 사용자가 만든 노트 검색
-const hotkeyLabels = (): [string, string][] => [
-  ["baro", "Baro 열기"], ["ai", "AI에게 묻기"], ["store", "확장 스토어"], ["graph", "노트 그래프 (전체)"], ["files", "파일 찾기 (Finder)"], ["memo", "빠른 메모"], ["clipboard", "클립보드 기록"],
-  ...getConfig().note_searches.map(n => [`note:${n.id}`, n.name] as [string, string]),
-  // 검색어 없는 퀵링크 (예: 아이디어 캔버스 열기). 누르면 Baro 창 없이 바로 열림
-  ...getConfig().quicklinks.filter(l => !l.url.includes("{query}")).map(l => [`link:${l.keyword}`, l.name] as [string, string]),
-];
-const KEY_NAMES: Record<string, string> = {
-  Alt: "⌥", Option: "⌥", Shift: "⇧", Control: "⌃", Ctrl: "⌃", Super: "⌘", Cmd: "⌘", Command: "⌘", Meta: "⌘",
-  ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→", Enter: "↵", Backquote: "`", Minus: "-", Equal: "=",
-  Comma: ",", Period: ".", Slash: "/", Semicolon: ";", Quote: "'", BracketLeft: "[", BracketRight: "]", Backslash: "\\",
-};
-// "Alt+KeyL" → "⌥L"
-export const fmtKey = (accel: string) =>
-  accel ? accel.split("+").map(k => KEY_NAMES[k] ?? k.replace(/^Key|^Digit/, "")).join("") : "";
-// 눌린 키 → "Alt+Shift+KeyL" (물리 키 이름이라 한글 자판에서도 같음)
-function accelOf(e: KeyboardEvent) {
-  if (["Shift", "Alt", "Control", "Meta", "CapsLock"].includes(e.key)) return null;
-  const mods = [e.ctrlKey && "Control", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean);
-  // 수정 키 없이 쓸 수 있는 건 F1~F20만
-  if (!mods.length && !/^F\d+$/.test(e.code)) return null;
-  return [...mods, e.code].join("+");
-}
-
-// notes: 내 노트에게 묻기 (sources = 찾은 노트, 답변 아래 출처로 표시)
-type Source = { title: string; file: string };
-type Ai = { id: number; q: string; text: string; busy: boolean; error: string | null; saved?: string; saveError?: string; notes?: boolean; sources?: Source[] };
-type Store = { entries: StoreEntry[]; loading: boolean; error: string | null };
-type Notes = { search: NoteSearch | null; docs: Doc[]; loading: boolean; error: string | null };
-// 노트 검색 추가·수정 화면의 입력값
-type Draft = { id: string; name: string; dir: string; kind: NoteKind; hotkey: string; recording: boolean; error: string | null; saving: boolean };
-type Hk = { keys: Record<string, string>; recording: string | null; error: string | null };
-// 비밀번호 모음: 수정(doc 있음) 또는 새 노트 추가(doc 없음)
-type PwDraft = { doc: Doc | null; name: string; title: string; password: string; error: string | null; saving: boolean };
-const MASK = "••••••••";
-// 커리큘럼 상태: 머리말 status 값 → 표시 이름, ⌘D로 다음 상태. 허브 단계는 학습 전 → 학습 중 → 복습 필요 → 완료
-const STATUS: Record<string, string> = { todo: "할 일", doing: "진행 중", "in-progress": "진행 중", done: "완료",
-  "학습 전": "학습 전", "학습 중": "학습 중", "복습 필요": "복습 필요", "완료": "완료" };
-const HUB_STATES = ["학습 전", "학습 중", "복습 필요", "완료"];
-const nextStatus = (s: string) => HUB_STATES.includes(s) ? HUB_STATES[(HUB_STATES.indexOf(s) + 1) % 4]
-  : s === "todo" || !s ? "doing" : s === "done" ? "todo" : "done";
-const isDone = (s: string) => s === "done" || s === "완료";
-const isDoing = (s: string) => ["진행 중", "학습 중", "복습 필요"].includes(STATUS[s]);
-const weekLabel = (w?: string) => !w ? "" : /^[\d\s~-]+$/.test(w) ? `${w.replace(/-/g, "~")}주` : w;
-// 노트 검색별로 읽은 노트 (창을 다시 열 때 바로 보여 주기용). sig: 내용이 바뀌었는지 비교
-const docCache = new Map<string, { docs: Doc[]; sig: string }>();
-function docsSig(docs: Doc[]) {
-  let h = 0;
-  for (const d of docs) for (const s of [d.file, d.body]) for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return `${docs.length}:${h}`;
-}
-const lastDoc = (docs: Doc[]) => { const d = byCategory(docs); return d[d.length - 1]; };
-const yamlQuote = (v: string) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-const baseOf = (file: string) => file.split("/").pop()!.replace(/\.md$/, "");
-// 새 노트 이름 제안: 마지막 노트 이름의 끝 숫자 + 1 (자릿수 유지). 예: Bandit-Level-23 → Bandit-Level-24
-function nextName(last?: Doc) {
-  const b = last ? baseOf(last.file) : "새-항목-1";
-  const m = b.match(/^(.*?)(\d+)$/);
-  return m ? m[1] + String(Number(m[2]) + 1).padStart(m[2].length, "0") : `${b}-2`;
-}
-// 새 노트 내용: 마지막 노트의 머리말을 이어받아 번호만 바꿈 (level·login·ssh 등), 비밀번호는 입력값
-function newPwNote(last: Doc | undefined, name: string, title: string, password: string) {
-  const oldNum = last?.meta.level ?? baseOf(last?.file ?? "").match(/(\d+)$/)?.[1];
-  const newNum = name.match(/(\d+)$/) ? String(Number(name.match(/(\d+)$/)![1])) : undefined;
-  const lines = ["---", `created: ${today()}`];
-  for (const [k, v0] of Object.entries(last?.meta ?? {})) {
-    if (["created", "updated", "password", "key_file"].includes(k)) continue;
-    let v = last?.meta.key_file ? v0.replace(`-i ${last.meta.key_file} `, "") : v0;
-    if (oldNum && newNum) v = v.replace(new RegExp(`(?<!\\d)${Number(oldNum)}(?!\\d)`, "g"), newNum);
-    lines.push(`${k}: ${/^[\w.-]+$/.test(v) ? v : yamlQuote(v)}`);
-  }
-  if (last?.aliases.length) lines.push(`tags: [${last.aliases.join(", ")}]`);
-  lines.push(`password: ${yamlQuote(password)}`, "---");
-  const prefix = last ? baseOf(last.file).replace(/\d+$/, "") : "";
-  const keep = [...(last?.body.split(/^## 관련\s*$/m)[1] ?? "").matchAll(/\[\[([^\]|#]+)/g)].map(m => m[1]).filter(l => !prefix || !l.startsWith(prefix));
-  const links = [...new Set([...keep, ...(last ? [baseOf(last.file)] : [])])].map(l => `[[${l}]]`).join(" · ");
-  return `${lines.join("\n")}\n\n# ${title || name}\n\n## 풀이\n- \n\n## 배운 점\n- \n\n## 관련\n${links}\n`;
-}
-// 화면 종류: null(기본 검색) | 파일 찾기 | 확장 스토어 | 노트 검색 | 예시 고르기 | 단축키 설정 | AI 질문 | 노트 검색 관리 | 노트 검색 추가·수정
-type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit" | "files" | "memo" | "clip";
-// 클립보드 기록 (Rust clip.rs): at = 복사한 시각(ms), app = 그때 앞에 있던 앱
-type Clip = { text: string; at: number; app: string };
-const dayOf = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
-function clipDay(ms: number) {
-  const t = dayOf(Date.now()), y = dayOf(Date.now() - 86400000), d = dayOf(ms);
-  return d === t ? "오늘" : d === y ? "어제" : d;
-}
-const clipTime = (ms: number) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-// 빠른 메모: 기록할 커리큘럼 단계(없으면 Daily만), 어디서 왔는지(Esc로 돌아갈 곳), 결과 문구
-type Stage = { search: NoteSearch; doc: Doc };
-// 빠른 메모에 붙인 스크린샷 (⌘I): 클립보드 이미지 또는 스크린샷 파일
-type Shot = { source: "clip" | "file"; path: string | null; at: number; preview: string };
-type Memo = { stage: Stage | null; from: Mode; saved: string | null; error: string | null; finding?: boolean; daily?: string; dailyDate?: string; shot?: Shot | null };
-// 지운 기록 (⌘Z로 되돌리기): sec는 "daily" 또는 칸 이름
-type Removed = { sec: string; id: string; file: string; date: string; line: number; text: string };
-const RECORD = { learn: "배운 점", stuck: "막힌 점과 해결", cmd: "사용한 명령어" } as const;
-const pad = (n: number) => String(n).padStart(2, "0");
-// 마지막 공부 날짜 → "오늘", "3일 전"
-const ago = (date?: string) => {
-  const t = date && Date.parse(`${date}T00:00:00`);
-  if (!t) return "";
-  const n = Math.round((Date.parse(`${now().date}T00:00:00`) - t) / 86400000);
-  return n <= 0 ? "오늘 공부" : `${n}일 전 공부`;
-};
-const now = () => { const d = new Date(); return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` }; };
-// 명령어 기록: 한 줄이면 "- `cmd`", 여러 줄이거나 `가 있으면 코드 블록
-const cmdBlock = (s: string) => !s.includes("\n") && !s.includes("`") ? `- \`${s}\`` : "```bash\n" + s + "\n```";
-// 여러 줄 메모 → 목록 한 항목 (둘째 줄부터 들여쓰기)
-const listBlock = (s: string) => "- " + s.split("\n").map(l => l.trimEnd()).join("\n  ");
-// 기록 항목: "- " 줄 + 들여쓴 이어지는 줄, 또는 ``` 코드 블록 하나 (Rust wiki::items_in과 같은 규칙 — 지울 때 번호가 맞아야 함)
-type RecItem = { i: number; first: string; text: string };
-function itemsOf(lines: string[]): RecItem[] {
-  const out: RecItem[] = [];
-  for (let i = 0; i < lines.length;) {
-    let j = i + 1;
-    if (lines[i].startsWith("```")) { while (j < lines.length && !lines[j].startsWith("```")) j++; j = Math.min(j + 1, lines.length); }
-    else if (lines[i].startsWith("- ")) { while (j < lines.length && lines[j].trim() && /^[ \t]/.test(lines[j])) j++; }
-    else { i++; continue; }
-    out.push({ i: out.length, first: lines[i], text: lines.slice(i, j).join("\n") });
-    i = j;
-  }
-  return out;
-}
-const sectionRaw = (body: string, name: string) => {
-  const lines = body.split("\n"), h = lines.findIndex(l => l.trimEnd() === `### ${name}`);
-  if (h < 0) return [];
-  const end = lines.findIndex((l, i) => i > h && l.startsWith("#"));
-  return lines.slice(h + 1, end < 0 ? undefined : end);
-};
-const dailyRaw = (text: string) => { const m = text.match(/^---\n[\s\S]*?\n---\n/); return (m ? text.slice(m[0].length) : text).split("\n"); };
 
 export default function App() {
   const [q, setQ] = useState("");
@@ -191,6 +37,7 @@ export default function App() {
   const [memo, setMemo] = useState<Memo>({ stage: null, from: null, saved: null, error: null });
   const [delPending, setDelPending] = useState<string | null>(null); // 한 번 누른 × ("칸:번호")
   const [removed, setRemoved] = useState<Removed | null>(null);
+  const [editing, setEditing] = useState<{ sec: string; i: number; first: string; time?: string } | null>(null); // ✎로 고치는 중인 기록
   const [found, setFound] = useState<{ items: Item[]; loading: boolean }>({ items: [], loading: false }); // 파일 찾기 화면 결과
   const [sel, setSel] = useState(0);
   const [menu, setMenu] = useState(false); // ⌘K 액션 패널
@@ -380,7 +227,7 @@ export default function App() {
   // 빠른 메모 열기. stage가 없으면 커리큘럼에서 "진행 중"(없으면 아직 안 끝난 첫) 단계를 찾음 (목차 노트 제외)
   const openMemo = (stage?: Stage, from: Mode = null) => {
     setMemo({ stage: stage ?? null, from, saved: null, error: null, finding: !stage });
-    setDelPending(null); setRemoved(null);
+    setDelPending(null); setRemoved(null); setEditing(null);
     enter("memo");
     loadDaily();
     if (stage) return;
@@ -435,7 +282,31 @@ export default function App() {
         if (r.sec === "daily") loadDaily(); else if (memo.stage) refreshStage(memo.stage);
       }).catch(memoFail);
   };
+  // 기록 고치기 (✎): 그 항목 글을 입력칸에 불러오고, Enter로 같은 자리에 덮어씀
+  const recordsOf = (sec: string) => sec === "daily" ? itemsOf(dailyRaw(memo.daily ?? "")) : itemsOf(sectionRaw(memo.stage?.doc.body ?? "", sec));
+  const startEdit = (sec: string, i: number) => {
+    const item = recordsOf(sec)[i];
+    if (!item) return;
+    const { text, time } = editTextOf(item, sec);
+    setDelPending(null); setEditing({ sec, i, first: item.first, time }); setQ(text); setSel(0);
+    setMemo(m => ({ ...m, saved: null, error: null }));
+    requestAnimationFrame(() => input.current?.focus());
+  };
+  const cancelEdit = () => { setEditing(null); setQ(""); };
+  const saveEdit = async () => {
+    const ed = editing, st = memo.stage, daily = ed?.sec === "daily";
+    if (!ed || !q.trim() || (!daily && !st)) return;
+    await invoke("memo_replace", { id: st?.search.id ?? "", file: st?.doc.file ?? "", date: memo.dailyDate ?? now().date,
+      section: ed.sec, index: ed.i, first: ed.first, text: editBlockOf(ed.sec, q, ed.time) })
+      .then(() => {
+        setEditing(null); setQ(""); setRemoved(null);
+        setMemo(m => ({ ...m, saved: "고쳤어요", error: null }));
+        if (daily) loadDaily(); else refreshStage(st!);
+      }).catch(memoFail);
+  };
   const onRecClick = (e: MouseEvent<HTMLElement>) => {
+    const ed = (e.target as HTMLElement).closest<HTMLElement>(".rec-edit");
+    if (ed) { startEdit(ed.dataset.sec!, Number(ed.dataset.i)); return; }
     const b = (e.target as HTMLElement).closest<HTMLElement>(".rec-del");
     if (!b) { setDelPending(null); return; }
     const key = `${b.dataset.sec}:${b.dataset.i}`;
@@ -507,6 +378,15 @@ export default function App() {
     const raw = q.trim(), pre = raw[0] === "!" || raw[0] === "$";
     const text = pre ? raw.slice(1).trim() : raw;
     const st = memo.stage, short = st?.doc.name.split(":")[0] ?? "";
+    if (editing) {
+      const where = editing.sec === "daily" ? "오늘 Daily" : `${short} · ${editing.sec}`;
+      return [
+        { id: "memo-edit-save", title: "고친 내용 저장", subtitle: `${where} · ${editing.i + 1}번째 기록 자리에 덮어써요`, kind: "wiki", glyph: "memo",
+          actions: [{ title: "저장", keep: true, run: saveEdit }] },
+        { id: "memo-edit-cancel", title: "고치기 취소", subtitle: "Esc", kind: "wiki", glyph: "pause",
+          actions: [{ title: "취소", keep: true, run: async () => cancelEdit() }] },
+      ];
+    }
     // ⌘O: 메모를 적을 노트를 Obsidian에서 열기
     const openNote = (file: string) => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(file)}` });
     const openStage: Action = { title: "이 노트 열기 (Obsidian)", shortcut: "⌘O", run: async () => { if (st) await openNote(st.doc.file); } };
@@ -771,8 +651,9 @@ export default function App() {
       const shown = items.slice(-6), n = items.length;
       return `<section class="rec${on ? " on" : ""}"><h4>${title} <span>${n ? `${n}개${n > 6 ? " · 최근 6개" : ""}` : ""}</span></h4>`
         + (shown.length ? shown.map(it => {
-          const ask = delPending === `${sec}:${it.i}`;
-          return `<div class="rec-item">${marked.parse(it.text, { async: false }) as string}`
+          const ask = delPending === `${sec}:${it.i}`, ed = editing?.sec === sec && editing.i === it.i;
+          return `<div class="rec-item${ed ? " editing" : ""}">${marked.parse(it.text, { async: false }) as string}`
+            + `<button class="rec-edit" data-sec="${sec}" data-i="${it.i}" title="고치기">✎</button>`
             + `<button class="rec-del${ask ? " ask" : ""}" data-sec="${sec}" data-i="${it.i}" title="지우기">${ask ? "지우기?" : "×"}</button></div>`;
         }).join("") : `<p class="none">${sub}</p>`) + "</section>";
     };
@@ -793,7 +674,7 @@ export default function App() {
         `${st.doc.name.split(":")[0]} · ${s}`, "아직 없음", s, itemsOf(sectionRaw(body, s)))) : []),
       box(memoSel === "memo-daily", "오늘 Daily", "오늘 적은 메모가 없어요", "daily", itemsOf(dailyRaw(memo.daily ?? ""))),
     ].join("");
-  }, [mode, memo.stage, memo.daily, memoSel, delPending, crit]);
+  }, [mode, memo.stage, memo.daily, memoSel, delPending, crit, editing]);
   // 고른 칸이 보이게 스크롤
   useEffect(() => { recRef.current?.querySelector(".rec.on")?.scrollIntoView({ block: "nearest" }); }, [memoHtml]);
 
@@ -994,6 +875,7 @@ export default function App() {
     if (mode === "memo" && !view && !menu) {
       if (e.metaKey && e.code === "KeyZ" && !q && removed) { e.preventDefault(); undoRemove(); return; }
       if (e.key === "Escape" && delPending) { e.preventDefault(); setDelPending(null); return; }
+      if (e.key === "Escape" && editing) { e.preventDefault(); cancelEdit(); return; }
       if (e.metaKey && e.code === "KeyI") { e.preventDefault(); toggleShot(); return; } // 방금 찍은 스크린샷 붙이기·빼기
       if (e.key === "Enter" && e.shiftKey) return; // 줄바꿈
       if (e.key === "Tab") { e.preventDefault(); const n = items.length || 1; setSel(s => (s + (e.shiftKey ? n - 1 : 1)) % n); return; }
@@ -1109,7 +991,8 @@ export default function App() {
       {items.map((it, i) => [
         it.section && it.section !== items[i - 1]?.section && <li key={`s-${i}`} className="section">{it.section}</li>,
         <li key={it.id} role="option" aria-selected={i === sel} className={i === sel ? "row on" : "row"}
-          onMouseMove={() => !menu && sel !== i && (setSel(i), setPending(null))} onClick={() => run(it.actions[0], it)}>
+          // 클릭하면 선택(미리보기 전환), 선택된 항목을 다시 누르면 실행
+          onClick={() => menu ? undefined : sel !== i ? (setSel(i), setPending(null)) : run(it.actions[0], it)}>
           <Icon it={it} />
           <span className="title">{it.title}</span><span className="sub">{it.subtitle}</span>
         </li>,

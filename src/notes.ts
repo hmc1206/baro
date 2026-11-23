@@ -502,11 +502,15 @@ export function studyCard(d: Doc): { md: string; taskMap: number[] } {
   const pick = (re: RegExp) => secs.filter(x => re.test(x.title));
   const taskMap: number[] = [];
   // 칸 내용 꺼내기. tasks: "only"면 체크박스 줄만, "skip"이면 체크박스 줄 빼고
+  // 체크박스 줄 아래 더 들여쓴 줄(완료 기준에 단 증거)은 그 체크박스와 한 묶음
   const take = (ss: Sec[], tasks: "all" | "only" | "skip" = "all", label = false) => ss.map(x => {
     const out: string[] = [];
+    let under = false;
     for (let i = x.from; i < x.to; i++) {
       const isTask = taskAt[i] >= 0;
-      if ((tasks === "only" && !isTask) || (tasks === "skip" && isTask)) continue;
+      under = isTask || (under && (/^\s/.test(lines[i]) || !lines[i].trim()));
+      const child = !isTask && under;
+      if ((tasks === "only" && !isTask && !child) || (tasks === "skip" && (isTask || child))) continue;
       if (isTask) taskMap.push(taskAt[i]);
       out.push(lines[i].replace(/^#{3,6}\s+(.*)$/, "**$1**"));
     }

@@ -562,6 +562,21 @@ fn memo_restore(id: String, file: String, date: String, section: String, line: u
     else { wiki::restore_record(&record_dir(&app, &id)?, &file, line, &text) }
 }
 
+// 빠른 메모 기록 고치기: 그 항목을 지운 자리에 고친 내용을 넣음
+#[tauri::command]
+fn memo_replace(id: String, file: String, date: String, section: String, index: usize, first: String, text: String, app: AppHandle) -> Result<(), String> {
+    if text.trim().is_empty() { return Err("고친 내용이 비어 있어요.".into()); }
+    if section == "daily" {
+        let vault = config::load(&config_file(&app))?.vault_dir;
+        let (line, _) = wiki::remove_daily(&vault, &date, index, &first)?;
+        wiki::restore_daily(&vault, &date, line, &text)
+    } else {
+        let dir = record_dir(&app, &id)?;
+        let (line, _) = wiki::remove_record(&dir, &file, &section, index, &first)?;
+        wiki::restore_record(&dir, &file, line, &text)
+    }
+}
+
 // 빠른 메모 스크린샷: 방금 찍은 것 (클립보드 이미지 또는 스크린샷 파일, 30분 이내)
 #[tauri::command]
 async fn shot_latest(app: AppHandle) -> Result<shot::Shot, String> {
@@ -785,7 +800,7 @@ fn main() {
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, notes_embed_build, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, note_set_field, note_toggle_task, note_add_evidence, note_stage_status, note_task_state, notes_named, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
+            notes_load, note_set_field, note_toggle_task, note_add_evidence, note_stage_status, note_task_state, notes_named, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, memo_remove, memo_restore, memo_replace, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
         .build(tauri::generate_context!())
         .expect("Baro 실행 실패")
