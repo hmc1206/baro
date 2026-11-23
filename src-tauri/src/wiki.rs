@@ -277,9 +277,8 @@ pub fn set_task_state(dir: &str, file: &str, index: usize, text: &str, value: &s
     })
 }
 
-fn edit_task(dir: &str, file: &str, index: usize, text: &str, edit: impl FnOnce(&str, usize) -> String) -> Result<(), String> {
-    let f = inside(dir, file)?;
-    let src = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
+// index번째 할 일 줄 찾기 → (줄 시작 위치, 줄 길이(줄바꿈 제외), 체크 글자 위치)
+fn find_task(src: &str, index: usize, text: &str) -> Result<(usize, usize, usize), String> {
     let mut start = 0;
     if src.starts_with("---\n") {
         if let Some(e) = src[4..].find("\n---") { start = src[4 + e + 1..].find('\n').map(|k| 4 + e + 1 + k + 1).unwrap_or(src.len()); }
@@ -294,13 +293,7 @@ fn edit_task(dir: &str, file: &str, index: usize, text: &str, edit: impl FnOnce(
             if let Some((pos, _, rest)) = task_marker(l) {
                 if n == index {
                     if rest != text.trim() { return Err("노트 내용이 바뀌었어요. 목록을 다시 열어 주세요.".into()); }
-                    let mut out = src.clone();
-                    out.replace_range(off..off + l.len(), &edit(l, pos));
-                    // 커리큘럼 허브면 그 단계 상태도 개념 진행에 맞춤
-                    if is_hub(&out) { out = roll_up(&out, out[..off].matches('\n').count()); }
-                    let tmp = f.with_extension("md.baro-tmp");
-                    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
-                    return std::fs::rename(&tmp, &f).map_err(|e| e.to_string());
+                    return Ok((off, l.len(), pos));
                 }
                 n += 1;
             }
@@ -308,6 +301,86 @@ fn edit_task(dir: &str, file: &str, index: usize, text: &str, edit: impl FnOnce(
         off += line.len();
     }
     Err("체크할 항목을 찾지 못했어요. 목록을 다시 열어 주세요.".into())
+}
+
+fn write_atomic(f: &Path, out: &str) -> Result<(), String> {
+    let tmp = f.with_extension("md.baro-tmp");
+    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, f).map_err(|e| e.to_string())
+}
+
+fn edit_task(dir: &str, file: &str, index: usize, text: &str, edit: impl FnOnce(&str, usize) -> String) -> Result<(), String> {
+    let f = inside(dir, file)?;
+    let src = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
+    let (off, len, pos) = find_task(&src, index, text)?;
+    let mut out = src.clone();
+    out.replace_range(off..off + len, &edit(&src[off..off + len], pos));
+    // 커리큘럼 허브면 그 단계 상태도 개념 진행에 맞춤
+    if is_hub(&out) { out = roll_up(&out, out[..off].matches('\n').count()); }
+    write_atomic(&f, &out)
+}
+
+// 완료 기준 증거: index번째 할 일 줄을 체크하고, 그 줄(과 이미 단 증거) 바로 아래에 "  - 날짜 내용"을 붙임.
+// 여러 줄이면 둘째 줄부터 더 들여써서 같은 항목으로. field가 있으면 머리말 evidence 목록에도 "날짜 field: 첫 줄" 추가
+pub fn add_evidence(dir: &str, file: &str, index: usize, text: &str, date: &str, body: &str, field: Option<&str>) -> Result<(), String> {
+    let ok_date = date.len() == 10 && date.chars().enumerate().all(|(i, c)| if i == 4 || i == 7 { c == '-' } else { c.is_ascii_digit() });
+    if !ok_date { return Err("날짜 형식이 잘못됐어요.".into()); }
+    let f = inside(dir, file)?;
+    let src = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
+    let out = with_evidence(&src, index, text, date, body, field)?;
+    write_atomic(&f, &out)
+}
+
+fn with_evidence(src: &str, index: usize, text: &str, date: &str, body: &str, field: Option<&str>) -> Result<String, String> {
+    let lines: Vec<&str> = body.lines().map(str::trim_end).collect();
+    let (Some(a), Some(b)) = (lines.iter().position(|l| !l.trim().is_empty()), lines.iter().rposition(|l| !l.trim().is_empty())) else {
+        return Err("기록할 내용이 없어요.".into());
+    };
+    let (off, len, pos) = find_task(src, index, text)?;
+    let indent: String = src[off..].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+    let block = lines[a..=b].iter().enumerate()
+        .map(|(i, l)| if i == 0 { format!("{indent}  - {date} {}", l.trim_start()) } else { format!("{indent}    {l}") })
+        .collect::<Vec<_>>().join("\n");
+    let mut out = src.to_string();
+    out.replace_range(pos + off..pos + off + 1, "x");
+    // 기준 줄 다음, 이미 단 증거(더 들여쓴 줄) 뒤에 넣음
+    let mut at = off + len;
+    if out[at..].starts_with('\n') { at += 1; }
+    else { out.push('\n'); at = out.len(); }
+    while at < out.len() {
+        let end = out[at..].find('\n').map(|k| at + k + 1).unwrap_or(out.len());
+        let l = &out[at..end];
+        if l.trim().is_empty() || !l.starts_with(&format!("{indent} ")) && !l.starts_with(&format!("{indent}\t")) { break; }
+        at = end;
+    }
+    let tail = if at == out.len() && !out.ends_with('\n') { "\n" } else { "" };
+    out.insert_str(at, &format!("{tail}{block}\n"));
+    if let Some(name) = field { out = push_list(&out, "evidence", &format!("{date} {name}: {}", lines[a].trim())); }
+    Ok(out)
+}
+
+// 머리말의 목록 항목(key)에 한 줄 추가. "key: []"나 빈 값이면 목록으로 바꿈, 없으면 머리말 끝에 만듦
+fn push_list(text: &str, key: &str, item: &str) -> String {
+    if !text.starts_with("---\n") { return text.to_string(); }
+    let Some(end) = text[4..].find("\n---").map(|i| i + 4) else { return text.to_string() };
+    let (head, rest) = text.split_at(end);
+    let mut lines: Vec<String> = head.split('\n').map(String::from).collect();
+    let entry = format!("  - {}", yaml_quote(item));
+    match lines.iter().position(|l| l.strip_prefix(key).is_some_and(|r| r.starts_with(':'))) {
+        Some(i) => {
+            let v = lines[i][key.len() + 1..].trim().to_string();
+            if v.starts_with('[') && v.ends_with(']') && v != "[]" {
+                lines[i] = format!("{key}: {}, {}]", &v[..v.len() - 1], yaml_quote(item));
+            } else {
+                lines[i] = format!("{key}:");
+                let mut j = i + 1;
+                while j < lines.len() && lines[j].trim_start().starts_with("- ") && lines[j].starts_with(' ') { j += 1; }
+                lines.insert(j, entry);
+            }
+        }
+        None => { lines.push(format!("{key}:")); lines.push(entry); }
+    }
+    format!("{}{}", lines.join("\n"), rest)
 }
 
 // "### 제목" 칸의 마지막 내용 줄 바로 뒤에 block을 끼워 넣음. 칸이 없으면 노트 끝에 칸을 만들어 추가
@@ -528,6 +601,30 @@ mod tests {
     }
 
     #[test]
+    fn evidence_under_criterion() {
+        let src = "---\ntype: concept\nevidence: []\nlast_studied:\n---\n\n# 개념\n\n```\n- [ ] 코드 안\n```\n## Explain · 학습 완료 기준\n- [ ] **노트별 검증**: 검증하기\n- [ ] **독립 재현**: 다시 만들기\n\n## 끝\n";
+        // 첫 기준: 체크하고 바로 아래에 증거
+        let a = super::with_evidence(src, 0, "**노트별 검증**: 검증하기", "2026-11-23", "메일은 웹이 아님\n둘째 줄", None).unwrap();
+        assert!(a.contains("- [x] **노트별 검증**: 검증하기\n  - 2026-11-23 메일은 웹이 아님\n    둘째 줄\n- [ ] **독립 재현**"));
+        assert!(a.contains("evidence: []"));
+        // 같은 기준에 또 달면 앞 증거 뒤에
+        let b = super::with_evidence(&a, 0, "**노트별 검증**: 검증하기", "2026-11-24", "두 번째", None).unwrap();
+        assert!(b.contains("    둘째 줄\n  - 2026-11-24 두 번째\n- [ ] **독립 재현**"));
+        // 재현: 머리말 evidence 목록에도
+        let c = super::with_evidence(&b, 1, "**독립 재현**: 다시 만들기", "2026-11-24", "커밋 abc123", Some("독립 재현")).unwrap();
+        assert!(c.contains("- [x] **독립 재현**: 다시 만들기\n  - 2026-11-24 커밋 abc123\n\n## 끝"));
+        assert!(c.contains("evidence:\n  - \"2026-11-24 독립 재현: 커밋 abc123\"\nlast_studied:"));
+        let d = super::push_list(&c, "evidence", "또");
+        assert!(d.contains("커밋 abc123\"\n  - \"또\"\nlast_studied:"));
+        // 노트가 바뀌었거나 내용이 없으면 거부
+        assert!(super::with_evidence(src, 0, "다른 글", "2026-11-23", "x", None).is_err());
+        assert!(super::with_evidence(src, 0, "**노트별 검증**: 검증하기", "2026-11-23", "  \n ", None).is_err());
+        // 파일 끝 기준 (줄바꿈 없음)
+        let e = super::with_evidence("- [ ] 마지막", 0, "마지막", "2026-11-23", "끝", None).unwrap();
+        assert_eq!(e, "- [x] 마지막\n  - 2026-11-23 끝\n");
+    }
+
+    #[test]
     fn insert_under_heading() {
         let t = "# 단계\n## 내 기록\n### 배운 점\n\n### 막힌 점과 해결\n- 예전 것\n\n### 사용한 명령어\n\n## 관련\n[[목차]]\n";
         let a = super::insert_under(t, "배운 점", "- 새로 배움");
@@ -628,5 +725,26 @@ mod tests {
         assert!(super::create_concept(&vs, &src2, "새개념", "2026-11-19").unwrap().0.ends_with("00_Inbox/새개념.md"));
         assert!(super::create_concept(&vs, &src, "../탈출", "2026-11-19").is_err());
         let _ = std::fs::remove_dir_all(&v);
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    // 실제 Vault로 커리큘럼 첫 열기 시간 재기: cargo test --release bench_curriculum -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_curriculum() {
+        let v = "/Volumes/Disk/MyBrain";
+        let d = format!("{v}/02_Knowledge/Curriculum");
+        if let Ok(c) = std::env::var("BARO_CACHE") { crate::vault::init(std::path::Path::new(&c)); }
+        for round in 0..3 {
+            let t = std::time::Instant::now();
+            let n = super::load(&d, "curriculum", v).unwrap();
+            let a = t.elapsed();
+            let t = std::time::Instant::now();
+            let names: Vec<String> = (1..=11).map(|i| format!("P01-{i:03}")).collect();
+            let m = super::named(&d, v, &names);
+            println!("round {round}: load {:?} (hubs {}, chapters {}) · named {:?} ({})", a, n.notes.len(), n.chapters.len(), t.elapsed(), m.len());
+        }
     }
 }

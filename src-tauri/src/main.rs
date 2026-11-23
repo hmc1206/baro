@@ -531,6 +531,12 @@ fn note_toggle_task(id: String, file: String, index: usize, text: String, done: 
     wiki::toggle_task(&record_dir(&app, &id)?, &file, index, &text, done)
 }
 
+// 커리큘럼 개념: 완료 기준(index번째 체크박스)에 증거를 달고 체크. field가 있으면 머리말 evidence에도
+#[tauri::command]
+fn note_add_evidence(id: String, file: String, index: usize, text: String, date: String, body: String, field: Option<String>, app: AppHandle) -> Result<(), String> {
+    wiki::add_evidence(&record_dir(&app, &id)?, &file, index, &text, &date, &body, field.as_deref())
+}
+
 // 빠른 메모: 오늘 Daily 노트에 한 줄 추가
 #[tauri::command]
 fn memo_daily(date: String, time: String, text: String, app: AppHandle) -> Result<String, String> {
@@ -779,7 +785,7 @@ fn main() {
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, notes_embed_build, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, note_set_field, note_toggle_task, note_stage_status, note_task_state, notes_named, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
+            notes_load, note_set_field, note_toggle_task, note_add_evidence, note_stage_status, note_task_state, notes_named, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, memo_remove, memo_restore, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
         .build(tauri::generate_context!())
         .expect("Baro 실행 실패")

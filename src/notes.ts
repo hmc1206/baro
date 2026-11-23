@@ -47,7 +47,7 @@ export type Doc = {
 // 허브 단계의 개념 항목. hubIndex: 허브 파일 전체에서 그 체크박스 줄의 순서(-1이면 체크박스 아님)
 export type Concept = { name: string; link: string; hubFile: string; hubIndex: number; hubText: string;
   status: string; priority: string; prereq: string; desc: string; stage: string };
-type Note = { file: string; folder: string; text: string };
+export type Note = { file: string; folder: string; text: string };
 
 // 명령어 사전의 분류 순서 (리눅스 노트 기준). 목록에 없는 분류는 뒤에 이름순
 const CATEGORY_ORDER = [
@@ -141,7 +141,7 @@ function firstLine(body: string) {
 // 커리큘럼 허브(머리말 type: curriculum-hub): "## 단계별 학습" 아래 "### 단계"가 단계 하나.
 // 상태는 "**단계 상태**: 학습 전 · 약 18시간 · 단계 노트: [[이름|…]]" 줄. 분야 순서: 프론트엔드 → 백엔드 → CS → 보안
 const FIELDS: Record<string, [number, string]> = { frontend: [0, "프론트엔드"], backend: [1, "백엔드"], cs: [2, "CS"], security: [3, "보안"] };
-function hubStages(hubs: Note[], stageNotes: Note[], chapters: Map<string, string>): Doc[] {
+export function hubStages(hubs: Note[], stageNotes: Note[], chapters: Map<string, string>): Doc[] {
   const byName = new Map(stageNotes.map(n => [baseName(n.file), n]));
   const out: Doc[] = [];
   for (const h of hubs) {
@@ -368,6 +368,53 @@ export async function conceptDocs(search: NoteSearch, stage: Doc): Promise<Doc[]
 // 공부 카드: 개념 노트의 칸들을 모든 개념에 같은 5단계 순서로 다시 배치.
 // ① 목표 → ② 읽고 이해하기 → ③ 예측하고 직접 해 보기 → ④ 문서를 닫고 설명하기 → ⑤ 완료 기준·증거
 export const STUDY_STEPS = ["목표 확인", "읽고 이해하기", "예측하고 직접 해 보기", "문서를 닫고 설명하기", "완료 기준 체크·증거 남기기"];
+// 개념 노트의 완료 기준: "## … 완료 기준"(또는 Explain) 칸의 체크박스와 그 아래 들여쓴 증거 줄.
+// index는 노트 전체에서의 체크박스 순서 (코드 블록 제외, tasksOf와 같은 규칙)
+export type Criterion = { index: number; label: string; desc: string; text: string; done: boolean; evidence: string[] };
+export function criteriaOf(d: Doc): Criterion[] {
+  const out: Criterion[] = [];
+  let fence = "", n = 0, inSec = false, cur: Criterion | null = null;
+  for (const raw of d.body.split("\n")) {
+    const l = raw.replace(/\r$/, "");
+    const f = l.trim().match(/^(```|~~~)/)?.[1];
+    if (f) { if (!fence) fence = f; else if (f === fence) fence = ""; cur = null; continue; }
+    if (fence) continue;
+    if (/^#{1,2}\s/.test(l)) { inSec = /완료 기준|^##\s+Explain\b/.test(l); cur = null; continue; }
+    const m = l.match(TASK);
+    if (m) {
+      const index = n++;
+      if (inSec && !/^\s/.test(l)) {
+        const lm = m[2].trim().match(/^\*\*(.+?)\*\*\s*[:：]?\s*(.*)$/);
+        cur = { index, label: lm ? lm[1].trim() : m[2].trim().slice(0, 20), desc: lm ? lm[2] : m[2].trim(), text: m[2].trim(), done: m[1] !== " ", evidence: [] };
+        out.push(cur);
+      } else cur = null;
+      continue;
+    }
+    if (cur && /^\s+[-*+]\s+/.test(l)) cur.evidence.push(l.replace(/^\s+[-*+]\s+/, ""));
+    else if (cur && /^\s{3,}\S/.test(l) && cur.evidence.length) cur.evidence[cur.evidence.length - 1] += "\n" + l.trim();
+    else if (cur && l.trim() && !/^\s/.test(l)) cur = null;
+  }
+  return out;
+}
+
+// 완료 기준에 답할 때 볼 노트 본문 칸 (정답 모음이 따로 없으므로 근거가 되는 칸을 보여 줌)
+// 검증: 핵심·예제·실습 / 설명: 핵심·실무(자주 발생하는 오류) / 재현: 예제·실습
+export function criterionHints(d: Doc, label: string): string {
+  const lines = d.body.split("\n");
+  const secs: { title: string; body: string }[] = [];
+  let fence = "";
+  lines.forEach(l => {
+    const f = l.trim().match(/^(```|~~~)/)?.[1];
+    if (f) fence = !fence ? f : f === fence ? "" : fence;
+    if (!fence && !f && /^##\s/.test(l)) secs.push({ title: l.replace(/^##\s+/, "").trim(), body: "" });
+    else if (secs.length) secs[secs.length - 1].body += l + "\n";
+  });
+  const want = /검증/.test(label) ? /^(What|Why|How|Syntax|Example|Code|Practice)\b/
+    : /설명/.test(label) ? /^(What|Why|How|Real World)\b/
+    : /재현/.test(label) ? /^(Syntax|Example|Code|Practice)\b/ : /^(What|Why|How)\b/;
+  return secs.filter(s => want.test(s.title) && s.body.trim()).map(s => `**${s.title}**\n\n${s.body.trim()}`).join("\n\n");
+}
+
 export function studyCard(d: Doc): { md: string; taskMap: number[] } {
   const c = d.concept!;
   const lines = d.body.split("\n");
@@ -412,7 +459,8 @@ export function studyCard(d: Doc): { md: string; taskMap: number[] } {
     step(0, goalOnly(take(pick(/목표/), "skip")), "이 개념으로 무엇을 할 수 있어야 하는지 한 줄로 적어 보세요."),
     step(1, [take(read, "skip", read.length > 1), take(pick(/자료|더 읽기/))].filter(Boolean).join("\n\n"),
       "공식 문서나 강의에서 정의·필요한 이유·동작 원리를 찾아 읽으세요."),
-    step(2, [take(pick(/^(Syntax|Example|Code)\b/), "skip"), take(pick(/^Practice\b/), "skip"), take(pick(/^Debugging\b/), "skip", true)].filter(Boolean).join("\n\n"),
+    // 실습 칸의 체크박스도 그대로 (완료 기준 칸과 겹치지 않음)
+    step(2, [take(pick(/^(Syntax|Example|Code)\b/)), take(pick(/^Practice\b/)), take(pick(/^Debugging\b/), "all", true)].filter(Boolean).join("\n\n"),
       "결과를 먼저 예측해 적고, 직접 실행해서 맞는지 확인하세요."),
     step(3, take(pick(/^Explain\b/), "skip"), "노트를 닫고 60초 동안 문제 → 동작 → 실패하는 경우 순서로 말해 보세요."),
     step(4, take(pick(/^Explain\b|완료 기준/), "only"), "실습 결과·커밋·스크린샷 중 하나를 증거로 남기세요."),

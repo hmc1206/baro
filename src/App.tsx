@@ -6,7 +6,7 @@ import {
   query, fileItems, storeItems, homeItems, aiItem, notesAiItem, iconFor, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry,
 } from "./commands";
-import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, conceptsOf, conceptDocs, studyCard, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
+import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, conceptsOf, conceptDocs, studyCard, criteriaOf, criterionHints, Criterion, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
 import { ICONS } from "./icons";
 import { NoteGraph, linkInfo } from "./graph";
 
@@ -222,6 +222,8 @@ export default function App() {
   const recRef = useRef<HTMLElement>(null);
   const shotList = useRef(""); // 방금 사진 링크를 넣은 첨부 목록 노트 (저장 안내에 표시)
   const memoDest = useRef(0); // 빠른 메모: 마지막으로 고른 저장할 곳 (사진 넣은 뒤 그 칸으로 돌아가기)
+  // 빠른 메모가 개념 노트를 향할 때 그 노트의 완료 기준 (검증·설명·재현)
+  const crit = useMemo(() => memo.stage?.doc.concept && memo.stage.doc.file ? criteriaOf(memo.stage.doc) : [], [memo.stage]);
   const list = useRef<HTMLUListElement>(null);
   const seq = useRef(0);
   const [rev, setRev] = useState(0);
@@ -460,6 +462,18 @@ export default function App() {
         refreshStage(st); // 오른쪽 기록과 커리큘럼 화면을 새 내용으로
       }).catch(memoFail);
   };
+  // 개념 메모: 완료 기준 줄 아래에 증거를 달고 체크 (재현은 머리말 evidence에도)
+  const saveEvidence = async (c: Criterion, block: string) => {
+    const st = memo.stage;
+    if (!st || !block.trim()) return;
+    await invoke("note_add_evidence", { id: st.search.id, file: st.doc.file, index: (st.doc.taskBase ?? 0) + c.index, text: c.text,
+      date: now().date, body: block, field: /재현/.test(c.label) ? c.label : null })
+      .then(() => stampStudied(st.doc.file))
+      .then(() => {
+        memoDone(`${st.doc.name.split(" ")[0]} · ${c.label} 증거를 적고 체크했어요`);
+        refreshStage(st);
+      }).catch(memoFail);
+  };
   const saveClipboard = async () => {
     const clip = (await invoke<string>("clipboard_text").catch(() => "")).trim();
     if (!clip) return memoFail("클립보드가 비어 있어요.");
@@ -497,7 +511,15 @@ export default function App() {
         if (emb === null) return;
         await saveRecord(section, section === RECORD.cmd ? [text && cmdBlock(text), emb].filter(Boolean).join("\n") : listBlock([text, emb].filter(Boolean).join("\n")));
       } }, openStage] });
-    const recs = st ? [rec(RECORD.learn, "learn"), rec(RECORD.stuck, "stuck"), rec(RECORD.cmd, "cmdlog")] : [];
+    // 개념 노트면 완료 기준(검증·설명·재현) 칸을 맨 위에: 적은 글을 그 기준의 증거로 달고 체크
+    const crits = st ? crit.map((c, i): Item => ({ id: `memo-crit-${i}`, title: `${short} · ${c.label}${c.done ? " ✓" : ""}`, subtitle: c.desc, kind: "wiki", glyph: "curriculum",
+      actions: [{ title: "증거 기록", keep: true, run: async () => {
+        if (!text && !memo.shot) return;
+        const emb = await attachShot(text, st.search.id, st.doc.file);
+        if (emb === null) return;
+        await saveEvidence(c, [text, emb].filter(Boolean).join("\n"));
+      } }, openStage] })) : [];
+    const recs = st ? [...crits, rec(RECORD.learn, "learn"), rec(RECORD.stuck, "stuck"), rec(RECORD.cmd, "cmdlog")] : [];
     const daily: Item = { id: "memo-daily", title: "오늘 Daily에 메모", subtitle: `03_Daily/${now().date}.md`, kind: "wiki", glyph: "daily",
       actions: [{ title: "메모", keep: true, run: async () => {
         if (!raw && !memo.shot) return;
@@ -747,12 +769,20 @@ export default function App() {
         }).join("") : `<p class="none">${sub}</p>`) + "</section>";
     };
     const st = memo.stage, body = st?.doc.body ?? "";
+    // 완료 기준 칸: 기준 설명과 지금까지 단 증거 (지우기는 Obsidian에서)
+    const critBox = (c: Criterion, i: number) => `<section class="rec${memoSel === `memo-crit-${i}` ? " on" : ""}"><h4>${c.label} <span>${c.done ? "✓ 체크됨" : "아직 체크 전"}${c.evidence.length ? ` · 증거 ${c.evidence.length}개` : ""}</span></h4>`
+      + `<p class="none">${marked.parseInline(c.desc, { async: false }) as string}</p>`
+      + c.evidence.slice(-6).map(e => `<div class="rec-item">${marked.parse(e, { async: false }) as string}</div>`).join("") + "</section>"
+      + (memoSel === `memo-crit-${i}` && st ? hintBox(criterionHints(st.doc, c.label)) : "");
+    // 고른 기준에 답할 때 볼 노트 본문 칸 (정답 모음이 따로 없어 근거 칸을 보여 줌)
+    const hintBox = (md: string) => md ? `<section class="rec hint"><h4>답 근거 <span>이 노트 본문에서</span></h4>${marked.parse(md, { async: false }) as string}</section>` : "";
     return [
+      ...crit.map(critBox),
       ...(st ? [RECORD.learn, RECORD.stuck, RECORD.cmd].map(s => box(memoSel === `memo-${s}` || (memoSel === "memo-clip" && s === RECORD.cmd),
         `${st.doc.name.split(":")[0]} · ${s}`, "아직 없음", s, itemsOf(sectionRaw(body, s)))) : []),
       box(memoSel === "memo-daily", "오늘 Daily", "오늘 적은 메모가 없어요", "daily", itemsOf(dailyRaw(memo.daily ?? ""))),
     ].join("");
-  }, [mode, memo.stage, memo.daily, memoSel, delPending]);
+  }, [mode, memo.stage, memo.daily, memoSel, delPending, crit]);
   // 고른 칸이 보이게 스크롤
   useEffect(() => { recRef.current?.querySelector(".rec.on")?.scrollIntoView({ block: "nearest" }); }, [memoHtml]);
 
@@ -843,9 +873,9 @@ export default function App() {
     const id = ++seq.current;
     setMenu(false); setPending(null); setPick(null);
     if (mode !== "memo") { setSel(restoreSel.current ?? 0); restoreSel.current = null; }
-    else if (memo.stage && /^\s*!/.test(q)) setSel(1); // 막힌 점과 해결
-    else if (memo.stage && /^\s*\$/.test(q)) setSel(2); // 사용한 명령어
-    else if (q.trim()) setSel(s => s > 3 ? 0 : s); // 클립보드 칸에 있다가 입력을 시작하면 (그 칸이 사라지므로) 첫 칸으로
+    else if (memo.stage && /^\s*!/.test(q)) setSel(crit.length + 1); // 막힌 점과 해결 (개념이면 완료 기준 칸 다음)
+    else if (memo.stage && /^\s*\$/.test(q)) setSel(crit.length + 2); // 사용한 명령어
+    else if (q.trim()) setSel(s => s > crit.length + 3 ? 0 : s); // 사진·클립보드 칸에 있다가 입력을 시작하면 첫 칸으로
     if (mode !== null) return;
     query(q, ui).then(r => {
       if (id !== seq.current) return;
