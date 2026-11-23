@@ -43,10 +43,13 @@ export type Doc = {
   concept?: Concept; // 단계 안의 개념 하나 (허브 항목 + 개념 노트)
   taskMap?: number[]; // 공부 카드의 체크박스 → 노트 전체 체크박스 순서
   next?: { concept: Concept; why: string; section: string }; // 단계 목록 위 개념 칸(다음 할 일·복습·개념 검색): 이 단계의 개념 하나
+  reviews?: Map<string, string>; // 허브 단계: 개념 노트 이름 → 머리말 next_review
+  expect?: Expect; // 개념: GUIDE 노트 "답을 확인한 뒤 변형하기" 표의 기대 관찰·변형
 };
+export type Expect = { see: string; vary: string };
 // 허브 단계의 개념 항목. hubIndex: 허브 파일 전체에서 그 체크박스 줄의 순서(-1이면 체크박스 아님)
 export type Concept = { name: string; link: string; hubFile: string; hubIndex: number; hubText: string;
-  status: string; priority: string; prereq: string; desc: string; stage: string };
+  status: string; priority: string; prereq: string; desc: string; stage: string; review?: string }; // review: 개념 노트의 next_review
 export type Note = { file: string; folder: string; text: string };
 
 // 명령어 사전의 분류 순서 (리눅스 노트 기준). 목록에 없는 분류는 뒤에 이름순
@@ -141,7 +144,7 @@ function firstLine(body: string) {
 // 커리큘럼 허브(머리말 type: curriculum-hub): "## 단계별 학습" 아래 "### 단계"가 단계 하나.
 // 상태는 "**단계 상태**: 학습 전 · 약 18시간 · 단계 노트: [[이름|…]]" 줄. 분야 순서: 프론트엔드 → 백엔드 → CS → 보안
 const FIELDS: Record<string, [number, string]> = { frontend: [0, "프론트엔드"], backend: [1, "백엔드"], cs: [2, "CS"], security: [3, "보안"] };
-export function hubStages(hubs: Note[], stageNotes: Note[], chapters: Map<string, string>): Doc[] {
+export function hubStages(hubs: Note[], stageNotes: Note[], chapters: Map<string, string>, reviews = new Map<string, string>()): Doc[] {
   const byName = new Map(stageNotes.map(n => [baseName(n.file), n]));
   const out: Doc[] = [];
   for (const h of hubs) {
@@ -173,7 +176,7 @@ export function hubStages(hubs: Note[], stageNotes: Note[], chapters: Map<string
       out.push({
         name: heading, category: field, summary: line, aliases: [field, ...toList(data.tags)], related: [],
         markdown: toMarkdown(sec, chapters), body: sec, examples: [], file: h.file, stub: false, meta,
-        tasks: tasksOf(sec), heading, taskBase: tasksOf(lines.slice(0, k).join("\n")).length, order: rank * 1000 + j, record,
+        tasks: tasksOf(sec), heading, taskBase: tasksOf(lines.slice(0, k).join("\n")).length, order: rank * 1000 + j, record, reviews,
       });
     });
   }
@@ -183,11 +186,11 @@ export function hubStages(hubs: Note[], stageNotes: Note[], chapters: Map<string
 export const byStage = (a: Doc, b: Doc) => (a.order ?? 0) - (b.order ?? 0) || a.file.localeCompare(b.file, undefined, { numeric: true });
 
 export async function loadDocs(search: NoteSearch): Promise<Doc[]> {
-  const w = await invoke<{ notes: Note[]; chapters: Note[] }>("notes_load", { id: search.id });
+  const w = await invoke<{ notes: Note[]; chapters: Note[]; reviews?: [string, string][] }>("notes_load", { id: search.id });
   const chapters = new Map([...w.chapters, ...w.notes].map(c => [baseName(c.file), c.text]));
   const isHub = (t: string) => frontmatter(t).data.type === "curriculum-hub" || (/^## 단계별 학습/m.test(t) && /^\*\*단계 상태\*\*:/m.test(t));
   const hubs = search.kind === "curriculum" ? w.notes.filter(n => isHub(n.text)) : [];
-  if (hubs.length) return hubStages(hubs, w.chapters, chapters);
+  if (hubs.length) return hubStages(hubs, w.chapters, chapters, new Map(w.reviews ?? []));
   // 커리큘럼: 첨부 목록 같은 목록 노트(type: index)는 단계가 아님
   const notes = search.kind === "curriculum" ? w.notes.filter(n => frontmatter(n.text).data.type !== "index") : w.notes;
   return notes.map(n => {
@@ -282,9 +285,10 @@ export function conceptsOf(stage: Doc): Concept[] {
       if (!lm) continue;
       const parts = lm[3].split("·").map(x => x.trim()).filter(Boolean);
       const state = parts.find(x => ["학습 전", "학습 중", "복습 필요", "완료"].includes(x)) ?? (m[1] !== " " ? "완료" : "학습 전");
+      const review = stage.reviews?.get(lm[1].trim().normalize("NFC"));
       out.push({ name: (lm[2] ?? lm[1]).trim(), link: lm[1].trim(), hubFile: stage.file, hubIndex: idx, hubText: m[2].trim(), status: state,
         priority: parts.find(x => /^(필수|선택|심화)/.test(x)) ?? "", prereq: parts.find(x => x.startsWith("선행"))?.replace(/^선행:\s*/, "") ?? "",
-        desc: "", stage: stage.name });
+        desc: "", stage: stage.name, ...(review ? { review } : {}) });
       continue;
     }
     const b = inKey && line.match(/^\s+-\s+(.+?)\s+—\s+(.*)$/);
@@ -300,7 +304,9 @@ export function conceptsOf(stage: Doc): Concept[] {
 // 다음 할 일: 분야마다 하나. 학습 중인 개념이 있으면 그것(이어서), 없으면 순서상 첫 미완료 개념 중 선행 개념이 모두 완료인 것.
 // 선행은 같은 분야 개념 번호(이름 첫 단어). 허브에 없는 번호는 막지 않음
 export const conceptId = (name: string) => name.trim().split(/\s+/)[0];
-export function nextUp(stages: Doc[]): Doc[] {
+export const localDate = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000);
+export function nextUp(stages: Doc[], today = localDate()): Doc[] {
   const fields = new Map<string, { stage: Doc; c: Concept }[]>(), plain = new Map<string, Doc[]>();
   for (const st of [...stages].filter(d => d.heading).sort(byStage)) {
     const cs = conceptsOf(st), list = fields.get(st.category) ?? [];
@@ -327,10 +333,19 @@ export function nextUp(stages: Doc[]): Doc[] {
     const why = doing ? "이어서 공부" : pre.length ? `선행 ${pre.join(", ")} 완료` : "선행 없음";
     out.push({ ...pick.stage, next: { concept: pick.c, why, section: "다음 할 일" } });
   }
-  // 복습 큐: 복습 필요로 표시한 개념 (분야·단계 순서)
+  // 복습 큐: 복습 필요로 표시한 개념 + 개념 노트 next_review가 오늘이거나 지난 개념 (학습 전 제외).
+  // 오래 밀린 것부터, 날짜가 없는 "복습 필요"는 그 뒤에 분야·단계 순서로. 이미 "다음 할 일"에 나온 개념은 빼기
+  const shown = new Set(out.map(d => `${d.next!.concept.hubFile}#${d.next!.concept.hubIndex}`));
+  const due: { d: Doc; late: number }[] = [];
   for (const list of fields.values())
-    for (const x of list) if (x.c.status === "복습 필요") out.push({ ...x.stage, next: { concept: x.c, why: "복습 필요", section: "복습할 개념" } });
-  return out;
+    for (const x of list) {
+      if (shown.has(`${x.c.hubFile}#${x.c.hubIndex}`)) continue;
+      const late = x.c.review && x.c.status !== "학습 전" ? daysBetween(x.c.review, today) : -1;
+      if (late < 0 && x.c.status !== "복습 필요") continue;
+      const why = late > 0 ? `복습일 ${late}일 지남` : late === 0 ? "오늘 복습" : "복습 필요";
+      due.push({ d: { ...x.stage, next: { concept: x.c, why, section: "복습할 개념" } }, late });
+    }
+  return [...out, ...due.sort((a, b) => b.late - a.late).map(x => x.d)];
 }
 
 // 분야를 넘는 개념 검색: 모든 허브 단계의 개념 이름·번호에서 찾기 (이름 시작 일치 먼저)
@@ -350,8 +365,10 @@ export function conceptHits(stages: Doc[], query: string, limit = 30): Doc[] {
 // 단계의 개념들을 개념 노트와 함께 읽기 (노트가 없는 개념은 file 빈 값)
 export async function conceptDocs(search: NoteSearch, stage: Doc): Promise<Doc[]> {
   const cs = conceptsOf(stage);
-  const notes = await invoke<Note[]>("notes_named", { id: search.id, names: [...new Set(cs.map(c => c.link).filter(Boolean))] });
+  const notes = await invoke<Note[]>("notes_named", { id: search.id, names: [...new Set([...cs.map(c => c.link).filter(Boolean), GUIDE])] });
   const byName = new Map(notes.map(n => [baseName(n.file).normalize("NFC"), n]));
+  const guide = byName.get(GUIDE.normalize("NFC"));
+  const exp = guide ? expectations(guide.text) : new Map<string, Expect>();
   return cs.map((c, i) => {
     const n = c.link ? byName.get(c.link.normalize("NFC")) : undefined;
     const { data, body } = n ? frontmatter(n.text) : { data: {} as Record<string, string | string[]>, body: "" };
@@ -359,10 +376,63 @@ export async function conceptDocs(search: NoteSearch, stage: Doc): Promise<Doc[]
     return {
       name: c.name, category: c.stage, summary: c.desc || String(data.summary ?? firstLine(text)), aliases: toList(data.aliases), related: [],
       markdown: "", body: text, examples: [], file: n?.file ?? "", stub: !n,
-      meta: { status: c.status, ...(data.last_studied ? { last: String(data.last_studied) } : {}) }, tasks: n ? tasksOf(body) : [],
-      order: i, concept: c,
+      meta: { status: c.status, ...(data.last_studied ? { last: String(data.last_studied) } : {}),
+        ...(data.status ? { note_status: String(data.status) } : {}), ...(data.next_review ? { review: String(data.next_review) } : {}) },
+      tasks: n ? tasksOf(body) : [], order: i, concept: c, ...(c.link && exp.has(c.link.normalize("NFC")) ? { expect: exp.get(c.link.normalize("NFC")) } : {}),
     };
   });
+}
+
+// 실행 가이드 노트: "| [[개념 링크|이름]] | 기대 관찰 | 변형 |" 표 → 개념 링크별 답
+const GUIDE = "GUIDE-실행과-복습";
+export function expectations(text: string): Map<string, Expect> {
+  const out = new Map<string, Expect>();
+  for (const l of text.split("\n")) {
+    const cells = l.trim().replace(/\[\[[^\]]*\]\]|\\\|/g, m => m.replace(/\\?\|/g, "\u0000")).split("|").slice(1, -1).map(x => x.replace(/\u0000/g, "|").trim());
+    const link = cells[0]?.match(/^\[\[([^\]|#]+)/)?.[1];
+    if (link && cells.length >= 3 && cells[1]) out.set(link.trim().normalize("NFC"), { see: cells[1], vary: cells[2] });
+  }
+  return out;
+}
+
+// 완료 기준 하나를 답할 질문들로 쪼개기 (노트 공통 문장 틀 기준)
+// "…하고 …한다" → 두 질문, "…는지, …는지 답한다" → 질문마다 하나, evidence·속성 갱신 문장은 Baro가 하므로 뺌
+export function questionsOf(c: Criterion): string[] {
+  const out: string[] = [];
+  for (const sen of c.desc.split(/(?<=\.)\s+/).map(x => x.trim().replace(/\.$/, "")).filter(Boolean)) {
+    if (/`evidence`|속성을 갱신/.test(sen)) continue;
+    const ask = sen.match(/^(.*는지)\s*답한다$/);
+    if (ask) { out.push(...ask[1].split(/,\s*/).map(x => x.replace(/는지$/, "나요?"))); continue; }
+    const parts = sen.split(/(?<=\S)하고\s+/);
+    if (parts.length > 1 && parts.every(x => x.length >= 6)) out.push(...parts.map((x, i) => i < parts.length - 1 ? `${x}한다` : x));
+    else out.push(sen);
+  }
+  return out.map(x => x.replace(/했다$/, "한다"));
+}
+
+// 증거를 단 뒤 바꿀 상태 (00 커리큘럼 전체의 상태·복습 간격 규칙)
+// 처음 증거 → doing·학습 중, 노트별 검증까지 → review·다음날 복습, 셋 다 → done·완료·7일 뒤 복습. 이미 앞선 상태면 그대로
+// 시간을 들이는 복습: done 개념의 복습일이 되면 복습할 개념 목록에 나오고, 증거를 기록하면 다음 복습일로
+export const addDays = (date: string, n: number) => {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+export function evidencePlan(crit: Criterion[], c: Criterion, d: Doc, today: string): { status?: string; hub?: string; review?: string } {
+  const done = crit.map(x => x.done || x.index === c.index);
+  const all = done.length > 0 && done.every(Boolean), checked = crit.some((x, i) => done[i] && /검증/.test(x.label));
+  const cur = d.meta.note_status ?? "", hub = d.concept?.status ?? "";
+  const rank = (s: string) => ["todo", "doing", "review", "done"].indexOf(s);
+  const status = all ? "done" : checked ? "review" : "doing";
+  // 끝낸 개념의 복습일에 다시 기록하면 = 복습함 → 다음 간격 (지난 간격 7일 → 21일 → 60일)
+  const due = !!d.meta.review && d.meta.review <= today;
+  const gap = d.meta.review && d.meta.last ? (Date.parse(d.meta.review) - Date.parse(d.meta.last)) / 86400000 : 0;
+  return {
+    ...(rank(status) > rank(cur) ? { status } : {}),
+    ...(d.concept && d.concept.hubIndex >= 0 && (all ? hub !== "완료" : hub === "학습 전" || !hub) ? { hub: all ? "완료" : "학습 중" } : {}),
+    ...(all && cur !== "done" ? { review: addDays(today, 7) } : checked && !all && !d.meta.review ? { review: addDays(today, 1) }
+      : cur === "done" && due ? { review: addDays(today, gap >= 21 ? 60 : gap >= 7 ? 21 : 7) } : {}),
+  };
 }
 
 // 공부 카드: 개념 노트의 칸들을 모든 개념에 같은 5단계 순서로 다시 배치.
@@ -455,14 +525,23 @@ export function studyCard(d: Doc): { md: string; taskMap: number[] } {
     ].join("\n\n") };
   }
   const read = pick(/^(What|Why|How|Structure|History)\b/);
+  // ③ 끝: 먼저 예측해 적게 하고, 기대 관찰(가이드 표)은 펼쳐야 보이게
+  const crits = criteriaOf(d), say = crits.find(x => /설명/.test(x.label));
+  const predict = [
+    "> **먼저 예측** — 실행하기 전에 결과를 ⌘N 메모의 **노트별 검증** 칸에 한 줄로 적고, 실행한 뒤 차이를 덧붙이세요.",
+    d.expect ? `<details><summary>답 확인 (예측한 뒤 펼치기)</summary>\n\n**기대 관찰** — ${d.expect.see}\n\n**변형 도전** — ${d.expect.vary}\n\n</details>` : "",
+  ].filter(Boolean).join("\n\n");
+  // ④: 말로 설명 기준을 질문으로 + 설명 채점 (정의·이유·흐름·예·반례 중 4개 이상)
+  const ask = say ? [...questionsOf(say).map((x, i) => `${i + 1}. ${x}`),
+    "", "> 채점: 정의 · 필요한 이유 · 내부 흐름 · 직접 만든 예 · 반례·제약 — 5개 중 4개 이상이면 통과"].join("\n") : "";
   const md = [
     step(0, goalOnly(take(pick(/목표/), "skip")), "이 개념으로 무엇을 할 수 있어야 하는지 한 줄로 적어 보세요."),
     step(1, [take(read, "skip", read.length > 1), take(pick(/자료|더 읽기/))].filter(Boolean).join("\n\n"),
       "공식 문서나 강의에서 정의·필요한 이유·동작 원리를 찾아 읽으세요."),
     // 실습 칸의 체크박스도 그대로 (완료 기준 칸과 겹치지 않음)
-    step(2, [take(pick(/^(Syntax|Example|Code)\b/)), take(pick(/^Practice\b/)), take(pick(/^Debugging\b/), "all", true)].filter(Boolean).join("\n\n"),
+    step(2, [take(pick(/^(Syntax|Example|Code)\b/)), take(pick(/^Practice\b/)), take(pick(/^Debugging\b/), "all", true), predict].filter(Boolean).join("\n\n"),
       "결과를 먼저 예측해 적고, 직접 실행해서 맞는지 확인하세요."),
-    step(3, take(pick(/^Explain\b/), "skip"), "노트를 닫고 60초 동안 문제 → 동작 → 실패하는 경우 순서로 말해 보세요."),
+    step(3, [take(pick(/^Explain\b/), "skip"), ask].filter(Boolean).join("\n\n"), "노트를 닫고 60초 동안 문제 → 동작 → 실패하는 경우 순서로 말해 보세요."),
     step(4, take(pick(/^Explain\b|완료 기준/), "only"), "실습 결과·커밋·스크린샷 중 하나를 증거로 남기세요."),
     "> ⌘N 이 개념 노트에 배운 점·막힌 점 기록 · ⌘D 상태 바꾸기 · ⌘O 노트 전체 열기",
   ].join("\n\n");

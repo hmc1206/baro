@@ -11,7 +11,8 @@ pub struct Note {
 }
 
 #[derive(Serialize)]
-pub struct Notes { pub notes: Vec<Note>, pub chapters: Vec<Note> }
+// reviews: 커리큘럼 허브일 때 폴더 안 노트의 [이름, 머리말 next_review] (날짜가 있는 노트만)
+pub struct Notes { pub notes: Vec<Note>, pub chapters: Vec<Note>, pub reviews: Vec<[String; 2]> }
 
 // 하위 폴더까지 .md 읽기 (vault.rs 캐시: 바뀐 파일만 다시 읽음)
 fn read_md(dir: &Path) -> Vec<Note> {
@@ -33,12 +34,14 @@ pub fn load(dir: &str, kind: &str, vault: &str) -> Result<Notes, String> {
     }
     let mut notes = read_md(d);
     let mut chapters = if kind == "commands" { d.parent().map(read_md).unwrap_or_default() } else { vec![] };
+    let mut reviews = vec![];
     if kind == "curriculum" && notes.iter().any(|n| is_hub(&n.text)) {
+        reviews = notes.iter().filter_map(|n| next_review(&n.text).map(|d| [note_name(&n.file).nfc().collect(), d])).collect();
         notes.retain(|n| is_hub(&n.text));
         let want: Vec<String> = notes.iter().flat_map(|n| stage_links(&n.text)).collect();
         chapters = named(dir, vault, &want);
     }
-    Ok(Notes { notes, chapters })
+    Ok(Notes { notes, chapters, reviews })
 }
 
 // 이름(파일 이름에서 .md 뺀 것)으로 Vault에서 노트 찾기. 같은 이름이면 dir 안의 노트 먼저, 이름마다 하나
@@ -52,6 +55,14 @@ pub fn named(dir: &str, vault: &str, names: &[String]) -> Vec<Note> {
     let mut seen = std::collections::HashSet::new();
     found.retain(|n| seen.insert(note_name(&n.file).to_string()));
     found
+}
+
+// 머리말의 next_review 날짜 (YYYY-MM-DD, 따옴표 허용). 비었거나 형식이 다르면 None
+fn next_review(text: &str) -> Option<String> {
+    let head = text.strip_prefix("---\n")?.split("\n---").next()?;
+    let v = head.lines().find_map(|l| l.strip_prefix("next_review:"))?.trim().trim_matches(|c| c == '"' || c == '\'');
+    let ok = v.len() == 10 && v.chars().enumerate().all(|(i, c)| if i == 4 || i == 7 { c == '-' } else { c.is_ascii_digit() });
+    ok.then(|| v.to_string())
 }
 
 fn note_name(file: &str) -> &str { file.rsplit('/').next().unwrap_or(file).trim_end_matches(".md") }
@@ -680,6 +691,14 @@ mod tests {
         let t = std::fs::read_to_string(&a).unwrap();
         assert!(t.starts_with("---\ncreated: 2026-11-15\n") && t.contains("## 답변\n답변\n"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn next_review_from_frontmatter() {
+        assert_eq!(super::next_review("---\nstatus: done\nnext_review: \"2026-11-24\"\n---\n# x"), Some("2026-11-24".into()));
+        assert_eq!(super::next_review("---\nnext_review: 2026-12-01\n---\n"), Some("2026-12-01".into()));
+        assert_eq!(super::next_review("---\nnext_review:\n---\n"), None);
+        assert_eq!(super::next_review("# 머리말 없음\nnext_review: 2026-12-01"), None);
     }
 
     #[test]

@@ -6,7 +6,7 @@ import {
   query, fileItems, storeItems, homeItems, aiItem, notesAiItem, iconFor, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry,
 } from "./commands";
-import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, conceptsOf, conceptDocs, studyCard, criteriaOf, criterionHints, Criterion, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
+import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, conceptsOf, conceptDocs, studyCard, criteriaOf, criterionHints, questionsOf, evidencePlan, Criterion, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
 import { ICONS } from "./icons";
 import { NoteGraph, linkInfo } from "./graph";
 
@@ -466,11 +466,19 @@ export default function App() {
   const saveEvidence = async (c: Criterion, block: string) => {
     const st = memo.stage;
     if (!st || !block.trim()) return;
-    await invoke("note_add_evidence", { id: st.search.id, file: st.doc.file, index: (st.doc.taskBase ?? 0) + c.index, text: c.text,
-      date: now().date, body: block, field: /재현/.test(c.label) ? c.label : null })
-      .then(() => stampStudied(st.doc.file))
+    const today = now().date, d = st.doc, plan = evidencePlan(crit, c, d, today);
+    const set = (key: string, value: string) => invoke("note_set_field", { id: st.search.id, file: d.file, key, value });
+    await invoke("note_add_evidence", { id: st.search.id, file: d.file, index: (d.taskBase ?? 0) + c.index, text: c.text,
+      date: today, body: block, field: /재현/.test(c.label) ? c.label : null })
+      .then(() => stampStudied(d.file))
+      // 상태·복습일·허브 상태는 Baro가 맞춤 (머리말이 없는 노트면 건너뜀)
+      .then(() => plan.status ? set("status", plan.status).catch(() => {}) : undefined)
+      .then(() => plan.review ? set("next_review", plan.review).catch(() => {}) : undefined)
+      .then(() => plan.hub && d.concept ? invoke("note_task_state",
+        { id: st.search.id, file: d.concept.hubFile, index: d.concept.hubIndex, text: d.concept.hubText, value: plan.hub }).catch(() => {}) : undefined)
       .then(() => {
-        memoDone(`${st.doc.name.split(" ")[0]} · ${c.label} 증거를 적고 체크했어요`);
+        const more = [plan.hub ? `허브 ${plan.hub}` : "", plan.status ? `status ${plan.status}` : "", plan.review ? `다음 복습 ${plan.review.slice(5)}` : ""].filter(Boolean);
+        memoDone(`${d.name.split(" ")[0]} · ${c.label} 증거를 적고 체크했어요${more.length ? ` · ${more.join(" · ")}` : ""}`);
         refreshStage(st);
       }).catch(memoFail);
   };
@@ -771,9 +779,12 @@ export default function App() {
     const st = memo.stage, body = st?.doc.body ?? "";
     // 완료 기준 칸: 기준 설명과 지금까지 단 증거 (지우기는 Obsidian에서)
     const critBox = (c: Criterion, i: number) => `<section class="rec${memoSel === `memo-crit-${i}` ? " on" : ""}"><h4>${c.label} <span>${c.done ? "✓ 체크됨" : "아직 체크 전"}${c.evidence.length ? ` · 증거 ${c.evidence.length}개` : ""}</span></h4>`
-      + `<p class="none">${marked.parseInline(c.desc, { async: false }) as string}</p>`
+      + `<ol class="ask">${questionsOf(c).map(x => `<li>${marked.parseInline(x, { async: false }) as string}</li>`).join("")}</ol>`
+      + (/재현/.test(c.label) ? `<p class="none">기록하면 체크·evidence·status·복습일은 자동으로 바뀌어요</p>` : "")
       + c.evidence.slice(-6).map(e => `<div class="rec-item">${marked.parse(e, { async: false }) as string}</div>`).join("") + "</section>"
-      + (memoSel === `memo-crit-${i}` && st ? hintBox(criterionHints(st.doc, c.label)) : "");
+      + (memoSel === `memo-crit-${i}` && st ? hintBox((/검증/.test(c.label) && st.doc.expect
+        ? `<details><summary>기대 관찰 (예측을 적은 뒤 펼치기)</summary>\n\n${st.doc.expect.see}\n\n**변형 도전** — ${st.doc.expect.vary}\n\n</details>\n\n` : "")
+        + criterionHints(st.doc, c.label)) : "");
     // 고른 기준에 답할 때 볼 노트 본문 칸 (정답 모음이 따로 없어 근거 칸을 보여 줌)
     const hintBox = (md: string) => md ? `<section class="rec hint"><h4>답 근거 <span>이 노트 본문에서</span></h4>${marked.parse(md, { async: false }) as string}</section>` : "";
     return [

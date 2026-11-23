@@ -1,7 +1,7 @@
 // 커리큘럼 허브 해석·다음 할 일·개념 검색·공부 카드 테스트 (npm test)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hubStages, conceptsOf, nextUp, conceptHits, studyCard, criteriaOf, criterionHints, byStage, type Doc } from "../src/notes.ts";
+import { hubStages, conceptsOf, nextUp, conceptHits, studyCard, criteriaOf, criterionHints, expectations, questionsOf, evidencePlan, addDays, byStage, type Doc, type Criterion } from "../src/notes.ts";
 
 const fe = `---
 type: curriculum-hub
@@ -130,4 +130,66 @@ test("criterionHints: 기준마다 답 근거가 되는 노트 칸", () => {
   assert.deepEqual(titles("말로 설명"), ["What · Why · How", "Real World · Connection"]);
   assert.deepEqual(titles("독립 재현"), ["Syntax · Example", "Practice · 작은 구현"]);
   assert.match(criterionHints({ body } as Doc, "독립 재현"), /## 코드 안 제목은 칸이 아님/);
+});
+
+test("expectations: 가이드 표의 위키링크 안 | 도 칸 구분으로 보지 않음", () => {
+  const m = expectations("| 개념 | 기대 관찰 | 변형 |\n|---|---|---|\n| [[P03-005-box-model|박스 모델]] | 외곽 폭은 200, 236 | 패딩을 다르게 |\n| [[P04-012-defaults\\|기본값]] | 생략은 10 | NaN 추가 |\n");
+  assert.deepEqual(m.get("P03-005-box-model"), { see: "외곽 폭은 200, 236", vary: "패딩을 다르게" });
+  assert.equal(m.get("P04-012-defaults")?.see, "생략은 10");
+  assert.equal(m.size, 2);
+});
+
+test("questionsOf: 완료 기준 문장을 질문으로, evidence 갱신 문장은 뺌", () => {
+  const q = (desc: string) => questionsOf({ desc } as Criterion);
+  assert.deepEqual(q("DNS가 해결하는 문제를 설명하고 출력에서 DNS 서버 주소와 응답 주소를 구분한다."),
+    ["DNS가 해결하는 문제를 설명한다", "출력에서 DNS 서버 주소와 응답 주소를 구분한다"]);
+  assert.deepEqual(q("성공·실패 경로를 화살표로 그리고 결과를 예측한다."), ["성공·실패 경로를 화살표로 그리고 결과를 예측한다"]);
+  assert.deepEqual(q("도메인과 DNS을 60~90초로 설명했다. 무엇을 해결하는지, 예제의 어떤 줄이 결과를 만들었는지, 위의 자주 발생하는 오류가 왜 틀렸는지 답한다."),
+    ["도메인과 DNS을 60~90초로 설명한다", "무엇을 해결하나요?", "예제의 어떤 줄이 결과를 만들었나요?", "위의 자주 발생하는 오류가 왜 틀렸나요?"]);
+  assert.deepEqual(q("예제를 닫고 조건이나 입력 하나를 바꿔 다시 구현했다. 커밋·테스트·관찰 기록 중 하나를 `evidence`에 남기고 속성을 갱신했다."),
+    ["예제를 닫고 조건이나 입력 하나를 바꿔 다시 구현한다"]);
+});
+
+test("evidencePlan: 첫 증거 → doing, 검증 → review·다음날, 셋 다 → done·완료·7일 뒤", () => {
+  const cr = (done: boolean[]): Criterion[] => ["노트별 검증", "말로 설명", "독립 재현"].map((label, i) => ({ index: i, label, desc: "", text: "", done: done[i], evidence: [] }));
+  const doc = (note_status: string, hub: string, review?: string) => ({ meta: { note_status, ...(review ? { review } : {}) },
+    concept: { status: hub, hubIndex: 3 } } as unknown as Doc);
+  const t = "2026-11-30";
+  assert.equal(addDays(t, 1), "2026-12-01");
+  let c = cr([false, false, false]);
+  assert.deepEqual(evidencePlan(c, c[1], doc("todo", "학습 전"), t), { status: "doing", hub: "학습 중" });
+  assert.deepEqual(evidencePlan(c, c[0], doc("doing", "학습 중"), t), { status: "review", review: "2026-12-01" });
+  c = cr([true, true, false]);
+  assert.deepEqual(evidencePlan(c, c[2], doc("review", "학습 중", "2026-12-01"), t), { status: "done", hub: "완료", review: "2026-12-07" });
+  c = cr([true, true, true]);
+  assert.deepEqual(evidencePlan(c, c[1], doc("done", "완료"), t), {}); // 이미 끝난 개념에 증거를 더 달면 그대로
+});
+
+test("공부 카드: ③ 예측 뒤 펼치는 기대 관찰, ④ 말로 설명 질문", () => {
+  const body = "# X\n\n## Practice\n- 해 보기\n\n## Explain · 학습 완료 기준\n- [ ] **노트별 검증**: 결과를 설명한다.\n- [ ] **말로 설명**: X를 60~90초로 설명했다. 무엇을 해결하는지, 왜 틀렸는지 답한다.\n";
+  const c = conceptsOf(stages()[0])[0];
+  const d = { name: c.name, category: "", summary: "", aliases: [], related: [], markdown: "", body, examples: [], file: "/v/x.md", stub: false,
+    meta: {}, tasks: [], concept: c, expect: { see: "1, 2, 1", vary: "참조 공유" } } as Doc;
+  const { md } = studyCard(d);
+  assert.match(md, /<details><summary>답 확인[^<]*<\/summary>[\s\S]*1, 2, 1[\s\S]*<\/details>/);
+  assert.ok(md.indexOf("먼저 예측") < md.indexOf("④"), md);
+  assert.ok(md.includes("1. X를 60~90초로 설명한다") && md.includes("2. 무엇을 해결하나요?") && md.includes("3. 왜 틀렸나요?"), md);
+});
+
+test("복습할 개념: next_review가 오늘이거나 지난 개념, 오래 밀린 것부터", () => {
+  const rv = new Map([["P01-001-web", "2026-11-20"], ["P01-003-dns", "2026-11-30"], ["P01-002-cs", "2026-11-23"]]);
+  const s = hubStages([{ file: "/v/FE.md", folder: "", text: fe }], [], new Map(), rv).sort(byStage);
+  const n = nextUp(s, "2026-11-23").filter(d => d.next!.section === "복습할 개념");
+  // P01-001(완료, 3일 지남) → P01-004(복습 필요, 날짜 없음). P01-002는 학습 전, P01-003은 아직 날짜 전이라 빠짐
+  assert.deepEqual(n.map(d => [d.next!.concept.name, d.next!.why]), [["P01-001 인터넷과 웹", "복습일 3일 지남"], ["P01-004 HTTP 요청과 응답", "복습 필요"]]);
+  assert.equal(conceptsOf(s[0])[0].review, "2026-11-20");
+  assert.equal(nextUp(s, "2026-11-20").find(d => d.next!.concept.name.startsWith("P01-001"))?.next!.why, "오늘 복습");
+});
+
+test("evidencePlan: 끝낸 개념을 복습일에 기록하면 다음 간격(7 → 21 → 60일)", () => {
+  const c = ["노트별 검증", "말로 설명", "독립 재현"].map((label, i): Criterion => ({ index: i, label, desc: "", text: "", done: true, evidence: [] }));
+  const doc = (review: string, last: string) => ({ meta: { note_status: "done", review, last }, concept: { status: "완료", hubIndex: 0 } } as unknown as Doc);
+  assert.deepEqual(evidencePlan(c, c[1], doc("2026-11-30", "2026-11-23"), "2026-11-30"), { review: "2026-12-21" });
+  assert.deepEqual(evidencePlan(c, c[1], doc("2026-12-21", "2026-11-30"), "2026-12-22"), { review: "2027-02-20" });
+  assert.deepEqual(evidencePlan(c, c[1], doc("2026-12-21", "2026-11-30"), "2026-12-01"), {}); // 아직 복습일 전
 });
