@@ -594,14 +594,26 @@ async fn shot_latest(app: AppHandle) -> Result<shot::Shot, String> {
     r?
 }
 
+// 메모할 노트의 폴더. id가 비면 오늘 Daily(03_Daily)
+fn memo_note_dir(app: &AppHandle, vault: &Path, id: &str, file: &str) -> Result<PathBuf, String> {
+    if id.is_empty() { return Ok(vault.join("03_Daily")); }
+    Ok(wiki::inside(&record_dir(app, id)?, file)?.parent().ok_or("노트 폴더를 찾지 못했어요.")?.to_path_buf())
+}
+
+// 메모 기록에 붙은 사진(![[파일]])을 미리보기용 data URL로
+#[tauri::command]
+async fn shot_read(id: String, file: String, name: String, app: AppHandle) -> Result<String, String> {
+    let vault = PathBuf::from(config::load(&config_file(&app))?.vault_dir);
+    let dir = memo_note_dir(&app, &vault, &id, &file)?.join("attachments");
+    tauri::async_runtime::spawn_blocking(move || shot::read(&dir, &name)).await.map_err(|e| e.to_string())?
+}
+
 // 스크린샷을 메모할 노트 옆 attachments/에 "날짜-이름"으로 저장하고, 그 폴더의 첨부 목록 노트에 링크 추가.
 // id가 비면 오늘 Daily(03_Daily). 돌려주는 값: 파일 이름, 첨부 목록 노트 이름(추가 실패면 빈 글자)
 #[tauri::command]
 async fn shot_save(source: String, path: Option<String>, name: String, date: String, id: String, file: String, app: AppHandle) -> Result<(String, String), String> {
     let vault = PathBuf::from(config::load(&config_file(&app))?.vault_dir);
-    let note_dir = if id.is_empty() { vault.join("03_Daily") } else {
-        wiki::inside(&record_dir(&app, &id)?, &file)?.parent().ok_or("노트 폴더를 찾지 못했어요.")?.to_path_buf()
-    };
+    let note_dir = memo_note_dir(&app, &vault, &id, &file)?;
     tauri::async_runtime::spawn_blocking(move || {
         let f = shot::save(&source, path.as_deref(), &name, &date, &note_dir.join("attachments"))?;
         let list = shot::add_to_list(&vault, &note_dir, &note_dir.join("attachments").join(&f))
@@ -806,7 +818,7 @@ fn main() {
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, notes_embed_build, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, note_set_field, note_toggle_task, note_add_evidence, note_edit_evidence, note_stage_status, note_task_state, notes_named, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, memo_remove, memo_restore, memo_replace, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
+            notes_load, note_set_field, note_toggle_task, note_add_evidence, note_edit_evidence, note_stage_status, note_task_state, notes_named, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, shot_read, memo_remove, memo_restore, memo_replace, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
         .build(tauri::generate_context!())
         .expect("Baro 실행 실패")

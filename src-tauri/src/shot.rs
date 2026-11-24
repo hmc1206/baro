@@ -59,6 +59,14 @@ fn data_url(bytes: &[u8], ext: &str) -> String {
     format!("data:{};base64,{}", mime(ext), base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
+// 저장해 둔 첨부 사진을 data URL로 (메모 기록 미리보기용). name은 attachments 안 파일 이름만 허용
+pub fn read(dir: &Path, name: &str) -> Result<String, String> {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    if name.contains(['/', '\\']) || name.starts_with('.') || !EXTS.contains(&ext.as_str()) { return Err("사진 파일 이름이 아니에요.".into()); }
+    let bytes = std::fs::read(dir.join(name)).map_err(|e| format!("사진을 읽지 못했어요: {e}"))?;
+    Ok(data_url(&bytes, &ext))
+}
+
 // 방금 찍은 스크린샷. 없으면 Err(안내 문구)
 pub fn latest() -> Result<Shot, String> {
     let now = now_ms();
@@ -219,6 +227,18 @@ mod tests {
         assert_eq!(clean_name("  chmod 권한 / 오류: 화면?\n둘째 줄"), "chmod-권한-오류-화면");
         assert_eq!(clean_name("[[a#b]]"), "ab");
         assert_eq!(clean_name("..."), "");
+    }
+
+    #[test]
+    fn read_only_takes_plain_image_names() {
+        let d = std::env::temp_dir().join(format!("baro-shot-read-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("2026-11-24-a.png"), [1u8, 2, 3]).unwrap();
+        assert_eq!(read(&d, "2026-11-24-a.png").unwrap(), "data:image/png;base64,AQID");
+        assert!(read(&d, "../a.png").is_err());
+        assert!(read(&d, "note.md").is_err());
+        assert!(read(&d, "없음.png").is_err());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

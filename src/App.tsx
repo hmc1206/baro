@@ -38,6 +38,7 @@ export default function App() {
   const [delPending, setDelPending] = useState<string | null>(null); // 한 번 누른 × ("칸:번호")
   const [removed, setRemoved] = useState<Removed | null>(null);
   const [editing, setEditing] = useState<{ sec: string; i: number; first: string; time?: string } | null>(null); // ✎로 고치는 중인 기록
+  const [shots, setShots] = useState<Record<string, string>>({}); // 메모 기록 속 사진: "id|file|이름" → data URL ("" = 못 읽음)
   const [found, setFound] = useState<{ items: Item[]; loading: boolean }>({ items: [], loading: false }); // 파일 찾기 화면 결과
   const [sel, setSel] = useState(0);
   const [menu, setMenu] = useState(false); // ⌘K 액션 패널
@@ -666,12 +667,18 @@ export default function App() {
   useEffect(() => { if (mode === "memo" && memoSel && memoSel !== "memo-shot") memoDest.current = sel; }, [mode, memoSel, sel]);
   const memoHtml = useMemo(() => {
     if (mode !== "memo") return "";
+    // 기록 속 "![[사진]]"을 그 노트 옆 attachments/의 사진으로 (아직 안 읽었으면 이름만, 아래 effect가 읽어 옴)
+    const md = (text: string, daily = false) => marked.parse(text.replace(/!\[\[([^\]|#/]+\.(?:png|jpe?g|heic|tiff))(?:\|[^\]]*)?\]\]/gi, (_, f: string) => {
+      const key = daily ? `||${f}` : `${memo.stage?.search.id ?? ""}|${memo.stage?.doc.file ?? ""}|${f}`, src = shots[key];
+      const name = f.replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
+      return src ? `<img class="rec-shot" src="${src}" alt="${name}" title="${name}">` : `<span class="rec-shot-name" data-shot="${encodeURIComponent(key)}">🖼 ${name}</span>`;
+    }), { async: false }) as string;
     const box = (on: boolean, title: string, sub: string, sec: string, items: RecItem[]) => {
       const shown = items.slice(-6), n = items.length;
       return `<section class="rec${on ? " on" : ""}"><h4>${title} <span>${n ? `${n}개${n > 6 ? " · 최근 6개" : ""}` : ""}</span></h4>`
         + (shown.length ? shown.map(it => {
           const ask = delPending === `${sec}:${it.i}`, ed = editing?.sec === sec && editing.i === it.i;
-          return `<div class="rec-item${ed ? " editing" : ""}">${marked.parse(it.text, { async: false }) as string}`
+          return `<div class="rec-item${ed ? " editing" : ""}">${md(it.text, sec === "daily")}`
             + `<button class="rec-edit" data-sec="${sec}" data-i="${it.i}" title="고치기">✎</button>`
             + `<button class="rec-del${ask ? " ask" : ""}" data-sec="${sec}" data-i="${it.i}" title="지우기">${ask ? "지우기?" : "×"}</button></div>`;
         }).join("") : `<p class="none">${sub}</p>`) + "</section>";
@@ -681,7 +688,7 @@ export default function App() {
     const critBox = (c: Criterion, i: number) => `<section class="rec${memoSel === `memo-crit-${i}` ? " on" : ""}"><h4>${c.label} <span>${c.done ? "✓ 체크됨" : "아직 체크 전"}${c.evidence.length ? ` · 증거 ${c.evidence.length}개` : ""}</span></h4>`
       + `<ol class="ask">${questionsOf(c).map(x => `<li>${marked.parseInline(x, { async: false }) as string}</li>`).join("")}</ol>`
       + (/재현/.test(c.label) ? `<p class="none">기록하면 체크·evidence·status·복습일은 자동으로 바뀌어요</p>` : "")
-      + c.evidence.map((e, n) => ({ e, n })).slice(-6).map(({ e, n }) => `<div class="rec-item${editing?.sec === `crit:${i}` && editing.i === n ? " editing" : ""}">${marked.parse(e, { async: false }) as string}`
+      + c.evidence.map((e, n) => ({ e, n })).slice(-6).map(({ e, n }) => `<div class="rec-item${editing?.sec === `crit:${i}` && editing.i === n ? " editing" : ""}">${md(e)}`
         + `<button class="rec-edit solo" data-sec="crit:${i}" data-i="${n}" title="고치기">✎</button></div>`).join("") + "</section>"
       + (memoSel === `memo-crit-${i}` && st ? hintBox((/검증/.test(c.label) && st.doc.expect
         ? `<details><summary>기대 관찰 (예측을 적은 뒤 펼치기)</summary>\n\n${st.doc.expect.see}\n\n**변형 도전** — ${st.doc.expect.vary}\n\n</details>\n\n` : "")
@@ -694,7 +701,15 @@ export default function App() {
         `${st.doc.name.split(":")[0]} · ${s}`, "아직 없음", s, itemsOf(sectionRaw(body, s)))) : []),
       box(memoSel === "memo-daily", "오늘 Daily", "오늘 적은 메모가 없어요", "daily", itemsOf(dailyRaw(memo.daily ?? ""))),
     ].join("");
-  }, [mode, memo.stage, memo.daily, memoSel, delPending, crit, editing]);
+  }, [mode, memo.stage, memo.daily, memoSel, delPending, crit, editing, shots]);
+  // 아직 안 읽은 기록 속 사진을 읽어 와 다시 그림 (못 읽으면 이름만 남김)
+  useEffect(() => {
+    const keys = [...new Set(Array.from(recRef.current?.querySelectorAll<HTMLElement>("[data-shot]") ?? []).map(e => decodeURIComponent(e.dataset.shot!)))].filter(k => !(k in shots));
+    keys.forEach(k => {
+      const [id, file, name] = k.split("|");
+      invoke<string>("shot_read", { id, file, name }).catch(() => "").then(src => setShots(s => ({ ...s, [k]: src })));
+    });
+  }, [memoHtml]);
   // 고른 칸이 보이게 스크롤
   useEffect(() => { recRef.current?.querySelector(".rec.on")?.scrollIntoView({ block: "nearest" }); }, [memoHtml]);
 
