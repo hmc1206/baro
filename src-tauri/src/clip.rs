@@ -65,16 +65,16 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-pub fn list() -> Vec<Clip> { LIST.lock().unwrap().clone() }
+pub fn list() -> Vec<Clip> { LIST.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() }
 
 pub fn remove(at: i64, text: &str) {
-    let mut l = LIST.lock().unwrap();
+    let mut l = LIST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     l.retain(|c| !(c.at == at && c.text == text));
     save(&l);
 }
 
 pub fn clear() {
-    let mut l = LIST.lock().unwrap();
+    let mut l = LIST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     l.clear();
     save(&l);
 }
@@ -84,7 +84,7 @@ pub fn start(file: &Path, enabled: bool) {
     let _ = FILE.set(file.to_path_buf());
     ENABLED.store(enabled, Ordering::Relaxed);
     if let Ok(b) = std::fs::read(file) {
-        if let Ok(v) = serde_json::from_slice::<Vec<Clip>>(&b) { *LIST.lock().unwrap() = v; }
+        if let Ok(v) = serde_json::from_slice::<Vec<Clip>>(&b) { *LIST.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = v; }
     }
     #[cfg(target_os = "macos")]
     std::thread::spawn(mac::watch);
@@ -122,7 +122,7 @@ mod mac {
             let Some(text) = pb.stringForType(unsafe { NSPasteboardTypeString }) else { continue };
             let app = NSWorkspace::sharedWorkspace().frontmostApplication()
                 .and_then(|a| a.localizedName()).map(|s| s.to_string()).unwrap_or_default();
-            let mut l = LIST.lock().unwrap();
+            let mut l = LIST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if push(&mut l, &text.to_string(), &app, now_ms()) { save(&l); }
         }
     }

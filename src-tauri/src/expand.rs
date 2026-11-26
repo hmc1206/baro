@@ -15,7 +15,7 @@ const KEEP: usize = 40;
 const MAGIC: i64 = 0x0BA_0E_A9; // Baro가 직접 보낸 키 입력 표시 (다시 읽지 않게)
 
 pub fn set_snippets(list: &[crate::config::Snippet]) {
-    *SNIPPETS.lock().unwrap() = list.iter().filter(|s| !s.keyword.trim().is_empty())
+    *SNIPPETS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = list.iter().filter(|s| !s.keyword.trim().is_empty())
         .map(|s| (s.keyword.trim().to_string(), s.text.clone())).collect();
 }
 
@@ -101,7 +101,15 @@ mod mac {
         });
     }
 
+    // 키 입력 감시 콜백: 안에서 패닉이 나도 macOS 쪽으로 넘어가 앱이 죽지 않게 잡고, 키 입력은 그대로 통과
     unsafe extern "C-unwind" fn callback(_: CGEventTapProxy, ty: CGEventType, ev: NonNull<CGEvent>, _: *mut c_void) -> *mut CGEvent {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| on_event(ty, ev))).unwrap_or_else(|_| {
+            BUF.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+            ev.as_ptr()
+        })
+    }
+
+    fn on_event(ty: CGEventType, ev: NonNull<CGEvent>) -> *mut CGEvent {
         let e = unsafe { ev.as_ref() };
         if ty == CGEventType::TapDisabledByTimeout || ty == CGEventType::TapDisabledByUserInput {
             let t = TAP.load(Ordering::Relaxed);
@@ -109,7 +117,7 @@ mod mac {
             return ev.as_ptr();
         }
         if !ON.load(Ordering::Relaxed) { return ev.as_ptr(); }
-        let mut buf = BUF.lock().unwrap();
+        let mut buf = BUF.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if ty != CGEventType::KeyDown { buf.clear(); return ev.as_ptr(); } // 클릭: 커서가 옮겨 갔을 수 있음
         if CGEvent::integer_value_field(Some(e), CGEventField::EventSourceUserData) == MAGIC { return ev.as_ptr(); }
         let flags = CGEvent::flags(Some(e));
@@ -125,7 +133,7 @@ mod mac {
         unsafe { CGEvent::keyboard_get_unicode_string(Some(e), 8, &mut len, u.as_mut_ptr()) };
         let typed = String::from_utf16_lossy(&u[..len as usize]);
         if typed.chars().any(char::is_control) { buf.clear(); return ev.as_ptr(); }
-        let list = SNIPPETS.lock().unwrap();
+        let list = SNIPPETS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((n, text)) = feed(&mut buf, &typed, &list) {
             if latin_input() { replace(n, text); }
         }
@@ -158,7 +166,7 @@ mod mac {
 #[cfg(target_os = "macos")]
 pub fn enable(on: bool) -> bool {
     ON.store(on, Ordering::Relaxed);
-    BUF.lock().unwrap().clear();
+    BUF.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
     if !on { return false; }
     if !mac::allowed() { mac::request(); return false; }
     mac::start()

@@ -31,12 +31,12 @@ static GEN: AtomicU64 = AtomicU64::new(0); // 끌어서 크기를 바꾸는 동�
 pub fn init(file: &Path) {
     let _ = FILE.set(file.to_path_buf());
     let map: HashMap<String, Size> = std::fs::read(file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    *SIZES.lock().unwrap() = Some(map);
+    *SIZES.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(map);
 }
 
 fn save() {
     let Some(f) = FILE.get() else { return };
-    let Ok(b) = serde_json::to_vec_pretty(SIZES.lock().unwrap().as_ref().unwrap_or(&HashMap::new())) else { return };
+    let Ok(b) = serde_json::to_vec_pretty(SIZES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().unwrap_or(&HashMap::new())) else { return };
     let tmp = f.with_extension("json.tmp");
     if std::fs::write(&tmp, b).is_err() { return; }
     #[cfg(unix)]
@@ -45,7 +45,7 @@ fn save() {
 }
 
 pub fn size_of(kind: &str) -> Size {
-    SIZES.lock().unwrap().as_ref().and_then(|m| m.get(kind).copied()).unwrap_or_else(|| default_size(kind))
+    SIZES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().and_then(|m| m.get(kind).copied()).unwrap_or_else(|| default_size(kind))
 }
 
 // 크기를 최소 크기 이상, 작업 영역 이하로
@@ -70,7 +70,7 @@ fn area_of(win: &WebviewWindow) -> Option<(Area, f64)> {
 // 지금 크기 기준이 되는 종류: 고정 중이면 "pinned", 아니면 화면 종류
 fn current(pinned: bool) -> String {
     if pinned { return "pinned".into(); }
-    let v = VIEW.lock().unwrap();
+    let v = VIEW.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if v.is_empty() { "normal".into() } else { v.clone() }
 }
 
@@ -96,7 +96,7 @@ pub fn apply(win: &WebviewWindow, pinned: bool, center: bool) {
 // 화면 종류가 바뀜 (프론트엔드가 알려 줌). 바뀌었으면 true
 pub fn set_view(kind: &str) -> bool {
     let kind = if matches!(kind, "wide" | "graph") { kind } else { "normal" };
-    let mut v = VIEW.lock().unwrap();
+    let mut v = VIEW.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if *v == kind { return false; }
     *v = kind.to_string();
     true
@@ -109,7 +109,7 @@ pub fn resized(win: &WebviewWindow, pinned: bool) {
     let size = ((s.width as f64 / k).round(), (s.height as f64 / k).round());
     let kind = current(pinned);
     {
-        let mut g = SIZES.lock().unwrap();
+        let mut g = SIZES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let m = g.get_or_insert_with(HashMap::new);
         if m.get(&kind) == Some(&size) || (m.get(&kind).is_none() && default_size(&kind) == size) { return; }
         m.insert(kind, size);
@@ -123,7 +123,7 @@ pub fn resized(win: &WebviewWindow, pinned: bool) {
 
 // 기억한 크기를 모두 지우고 기본 크기로
 pub fn reset() {
-    if let Some(m) = SIZES.lock().unwrap().as_mut() { m.clear(); }
+    if let Some(m) = SIZES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() { m.clear(); }
     save();
 }
 

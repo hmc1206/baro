@@ -111,7 +111,7 @@ pub fn index(vault: &Path, skip: &[String]) -> std::sync::Arc<Index> {
     let mut parts: Vec<Vec<u8>> = entries.iter().map(|e| [e.path.as_bytes(), &e.mtime.to_le_bytes(), &e.len.to_le_bytes()].concat()).collect();
     parts.extend(skip.iter().map(|s| s.as_bytes().to_vec()));
     let sig = crate::vault::hash64(&parts.iter().map(|p| p.as_slice()).collect::<Vec<_>>());
-    if let Some(ix) = INDEX.lock().unwrap().as_ref().filter(|ix| ix.sig == sig) { return ix.clone(); }
+    if let Some(ix) = INDEX.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().filter(|ix| ix.sig == sig) { return ix.clone(); }
     let mut docs = vec![];
     let mut chunks = vec![];
     let mut df: std::collections::HashMap<String, f32> = Default::default();
@@ -141,7 +141,7 @@ pub fn index(vault: &Path, skip: &[String]) -> std::sync::Arc<Index> {
     if crate::embed::exists() && crate::embed::adopt(&legacy) > 0 { crate::embed::save(None); }
     let avg = (chunks.iter().map(|c| c.len).sum::<f32>() / chunks.len().max(1) as f32).max(1.0);
     let ix = std::sync::Arc::new(Index { sig, docs, chunks, df, avg });
-    *INDEX.lock().unwrap() = Some(ix.clone());
+    *INDEX.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ix.clone());
     ix
 }
 

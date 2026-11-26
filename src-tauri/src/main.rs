@@ -6,6 +6,7 @@ mod embed;
 mod expand;
 mod extensions;
 mod indexer;
+mod log;
 mod rag;
 mod search;
 mod shot;
@@ -45,8 +46,8 @@ fn ext_dir(app: &AppHandle) -> PathBuf { data_dir(app).join("extensions") }
 // 실행이 끝난 뒤: 이전 앱으로 포커스를 돌려줌. 고정 중이면 Baro 창은 그대로 둠
 fn dismiss(app: &AppHandle) {
     let st = app.state::<AppState>();
-    if *st.pinned.lock().unwrap() {
-        if let Some(b) = st.prev_bundle.lock().unwrap().clone() { system::activate(&b); }
+    if *st.pinned.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
+        if let Some(b) = st.prev_bundle.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() { system::activate(&b); }
         return;
     }
     close(app);
@@ -61,20 +62,23 @@ fn close(app: &AppHandle) {
 
 #[tauri::command]
 fn close_window(app: AppHandle) { close(&app); }
+// 화면에서 난 실패도 로그 파일에 남김
+#[tauri::command]
+fn log_error(msg: String) { log::write(&format!("화면 오류: {msg}")); }
 
 // 끌기 막대로 옮기기 시작하면 on=true. on=false면 위치 기억을 지우고 가운데로
 #[tauri::command]
 fn set_placed(on: bool, app: AppHandle, win: WebviewWindow) {
-    *app.state::<AppState>().placed.lock().unwrap() = on;
+    *app.state::<AppState>().placed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = on;
     if !on { let _ = win.center(); }
 }
 
 #[tauri::command]
 fn set_pinned(on: bool, app: AppHandle, win: WebviewWindow) -> bool {
     let st = app.state::<AppState>();
-    let was = std::mem::replace(&mut *st.pinned.lock().unwrap(), on);
+    let was = std::mem::replace(&mut *st.pinned.lock().unwrap_or_else(std::sync::PoisonError::into_inner), on);
     // 고정하면 고정 크기로 (왼쪽 위 위치는 그대로), 풀면 지금 화면 종류의 크기로
-    if on != was { window::apply(&win, on, !on && !*st.placed.lock().unwrap()); }
+    if on != was { window::apply(&win, on, !on && !*st.placed.lock().unwrap_or_else(std::sync::PoisonError::into_inner)); }
     on
 }
 
@@ -82,8 +86,8 @@ fn set_pinned(on: bool, app: AppHandle, win: WebviewWindow) -> bool {
 #[tauri::command]
 fn set_view(kind: String, app: AppHandle, win: WebviewWindow) {
     let st = app.state::<AppState>();
-    let pinned = *st.pinned.lock().unwrap();
-    if window::set_view(&kind) && !pinned { window::apply(&win, false, !*st.placed.lock().unwrap()); }
+    let pinned = *st.pinned.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if window::set_view(&kind) && !pinned { window::apply(&win, false, !*st.placed.lock().unwrap_or_else(std::sync::PoisonError::into_inner)); }
 }
 
 // 기억한 창 크기를 모두 지우고 기본 크기로
@@ -91,12 +95,12 @@ fn set_view(kind: String, app: AppHandle, win: WebviewWindow) {
 fn window_reset(app: AppHandle, win: WebviewWindow) {
     let st = app.state::<AppState>();
     window::reset();
-    window::apply(&win, *st.pinned.lock().unwrap(), !*st.placed.lock().unwrap());
+    window::apply(&win, *st.pinned.lock().unwrap_or_else(std::sync::PoisonError::into_inner), !*st.placed.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
 }
 
 #[tauri::command]
 fn search(q: String, st: State<AppState>) -> Vec<indexer::AppEntry> {
-    search::rank(&st.apps.lock().unwrap(), &st.usage.lock().unwrap(), &q, 8)
+    search::rank(&st.apps.lock().unwrap_or_else(std::sync::PoisonError::into_inner), &st.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner), &q, 8)
 }
 
 // 아이콘을 data URL로 반환. 캐시에 없으면 그 자리에서 만듦 (async라 메인 스레드를 막지 않음)
@@ -123,7 +127,7 @@ fn launch(path: String, st: State<AppState>, app: AppHandle) -> Result<(), Strin
     start(&path).map_err(|e| e.to_string())?;
     dismiss(&app);
     // 사용 기록은 디스크에 저장해 재시작 후에도 유지
-    let mut usage = st.usage.lock().unwrap();
+    let mut usage = st.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     *usage.entry(path).or_default() += 1;
     let f = usage_file(&app);
     let _ = std::fs::create_dir_all(f.parent().unwrap());
@@ -288,7 +292,7 @@ fn store_uninstall(id: String, app: AppHandle) -> Result<(), String> { extension
 #[tauri::command]
 async fn window_layout(kind: String, app: AppHandle, win: WebviewWindow) -> Result<(), String> {
     system::need_ax()?;
-    let pid = (*app.state::<AppState>().prev_pid.lock().unwrap()).ok_or("배치할 창이 없어요.")?;
+    let pid = (*app.state::<AppState>().prev_pid.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).ok_or("배치할 창이 없어요.")?;
     let m = win.current_monitor().ok().flatten().ok_or("화면 정보를 읽지 못했어요.")?;
     let s = m.scale_factor();
     let wa = m.work_area();
@@ -393,21 +397,21 @@ fn toggle(w: &WebviewWindow, action: &str) {
     let st = w.state::<AppState>();
     let visible = w.is_visible().unwrap_or(false);
     let focused = w.is_focused().unwrap_or(false);
-    let pinned = *st.pinned.lock().unwrap();
-    if visible && (focused || !pinned) && *st.action.lock().unwrap() == action { close(w.app_handle()); return; }
+    let pinned = *st.pinned.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if visible && (focused || !pinned) && *st.action.lock().unwrap_or_else(std::sync::PoisonError::into_inner) == action { close(w.app_handle()); return; }
     if !(visible && focused) {
         // 창 관리·붙여넣기 대상이 되도록 Baro가 앞에 오기 전에 현재 앱을 기억
         let me = std::process::id() as i32;
         let (pid, bundle) = system::frontmost();
         if pid != Some(me) {
-            *st.prev_pid.lock().unwrap() = pid;
-            *st.prev_bundle.lock().unwrap() = bundle;
+            *st.prev_pid.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = pid;
+            *st.prev_bundle.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = bundle;
         }
         // 고정 중이거나 사용자가 옮겨 둔 창은 그 위치를 유지
-        if !visible && !pinned && !*st.placed.lock().unwrap() { let _ = w.center(); }
+        if !visible && !pinned && !*st.placed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) { let _ = w.center(); }
         let _ = w.show(); let _ = w.set_focus();
     }
-    *st.action.lock().unwrap() = action.to_string();
+    *st.action.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = action.to_string();
     let _ = w.emit("shown", action);
 }
 
@@ -428,8 +432,8 @@ fn register_hotkeys(app: &AppHandle) -> Vec<(String, String)> {
             Err(e) => errors.push((action, e.to_string())),
         }
     }
-    *app.state::<AppState>().hotkeys.lock().unwrap() = ids;
-    *app.state::<AppState>().suspended.lock().unwrap() = false;
+    *app.state::<AppState>().hotkeys.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = ids;
+    *app.state::<AppState>().suspended.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = false;
     errors
 }
 
@@ -438,7 +442,7 @@ fn register_hotkeys(app: &AppHandle) -> Vec<(String, String)> {
 fn suspend_hotkeys(on: bool, app: AppHandle) {
     if on {
         let _ = app.global_shortcut().unregister_all();
-        *app.state::<AppState>().suspended.lock().unwrap() = true;
+        *app.state::<AppState>().suspended.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
     } else {
         register_hotkeys(&app);
     }
@@ -588,9 +592,9 @@ fn memo_replace(id: String, file: String, date: String, section: String, index: 
 async fn shot_latest(app: AppHandle) -> Result<shot::Shot, String> {
     // 처음 데스크탑을 읽을 때 macOS 폴더 접근 확인 창이 뜨면 Baro가 초점을 잃음 → 그동안은 숨기지 않음
     let st = app.state::<AppState>();
-    *st.dialog_open.lock().unwrap() = true;
+    *st.dialog_open.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
     let r = tauri::async_runtime::spawn_blocking(shot::latest).await.map_err(|e| e.to_string());
-    *st.dialog_open.lock().unwrap() = false;
+    *st.dialog_open.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = false;
     r?
 }
 
@@ -617,7 +621,7 @@ async fn shot_save(source: String, path: Option<String>, name: String, date: Str
     tauri::async_runtime::spawn_blocking(move || {
         let f = shot::save(&source, path.as_deref(), &name, &date, &note_dir.join("attachments"))?;
         let list = shot::add_to_list(&vault, &note_dir, &note_dir.join("attachments").join(&f))
-            .unwrap_or_else(|e| { eprintln!("첨부 목록 추가 실패: {e}"); String::new() });
+            .unwrap_or_else(|e| { log::write(&format!("첨부 목록 추가 실패: {e}")); String::new() });
         Ok((f, list))
     }).await.map_err(|e| e.to_string())?
 }
@@ -714,18 +718,19 @@ fn delete_note_search(id: String, app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn pick_folder(start: String, app: AppHandle, win: WebviewWindow) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
-    *app.state::<AppState>().dialog_open.lock().unwrap() = true;
+    *app.state::<AppState>().dialog_open.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
     let _ = win.set_always_on_top(false);
     let mut d = app.dialog().file().set_title("노트 폴더 선택");
     if std::path::Path::new(&start).is_dir() { d = d.set_directory(&start); }
     let picked = d.blocking_pick_folder();
     let _ = win.set_always_on_top(true);
-    *app.state::<AppState>().dialog_open.lock().unwrap() = false;
+    *app.state::<AppState>().dialog_open.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = false;
     let _ = win.show(); let _ = win.set_focus();
     picked.map(|p| p.to_string())
 }
 
 fn main() {
+    log::init();
     // 단축키는 설정 파일의 hotkeys에서 읽음 (기본: Baro ⌥Space, 리눅스 명령어 노트 검색 ⌥L). Baro의 "단축키 설정"에서 변경
     tauri::Builder::default()
         // 안전장치: Baro 창이 앱 화면 밖(웹사이트)으로 이동하지 않게. http(s) 주소는 기본 브라우저로 열고 창은 그대로
@@ -741,7 +746,7 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, sc, ev| {
                 if ev.state() != ShortcutState::Pressed { return; }
-                let action = app.state::<AppState>().hotkeys.lock().unwrap().get(&sc.id()).cloned();
+                let action = app.state::<AppState>().hotkeys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&sc.id()).cloned();
                 // 퀵링크 단축키는 Baro 창을 띄우지 않고 바로 열기
                 if let Some(kw) = action.as_deref().and_then(|a| a.strip_prefix("link:")) {
                     let c = config::load(&config_file(app)).unwrap_or_default();
@@ -757,10 +762,10 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let h = app.handle().clone();
-            for (action, e) in register_hotkeys(&h) { eprintln!("단축키 등록 실패 {action}: {e}"); }
+            for (action, e) in register_hotkeys(&h) { log::write(&format!("단축키 등록 실패 {action}: {e}")); }
             if let Ok(c) = config::load(&config_file(&h)) {
                 expand::set_snippets(&c.snippets);
-                if c.snippet_expand && !expand::enable(true) { eprintln!("스니펫 자동 확장: 입력 모니터링 권한 필요"); }
+                if c.snippet_expand && !expand::enable(true) { log::write("스니펫 자동 확장: 입력 모니터링 권한 필요"); }
             }
             // 노트 캐시: 저장해 둔 것을 읽고, 뒤에서 Vault를 한 번 훑어 바뀐 노트만 새로 읽어 둠
             vault::init(&data_dir(&h).join("note-cache.json"));
@@ -777,25 +782,25 @@ fn main() {
             }
             clip::start(&data_dir(&h).join("clipboard.json"), config::load(&config_file(&h)).map(|c| c.clipboard_history).unwrap_or(true));
             if let Ok(b) = std::fs::read(usage_file(&h)) {
-                if let Ok(u) = serde_json::from_slice(&b) { *h.state::<AppState>().usage.lock().unwrap() = u; }
+                if let Ok(u) = serde_json::from_slice(&b) { *h.state::<AppState>().usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = u; }
             }
             // 인덱싱과 아이콘 캐시 생성은 백그라운드에서
             std::thread::spawn(move || {
                 let list = indexer::scan();
                 let paths: Vec<String> = list.iter().map(|a| a.path.clone()).collect();
-                *h.state::<AppState>().apps.lock().unwrap() = list;
+                *h.state::<AppState>().apps.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = list;
                 let _ = h.emit("indexed", ());
                 indexer::make_icons(&icon_dir(&h), &paths.iter().map(String::as_str).collect::<Vec<_>>());
             });
             Ok(())
         })
         .on_window_event(|w, e| if let WindowEvent::Resized(_) = e {
-            let pinned = *w.app_handle().state::<AppState>().pinned.lock().unwrap();
+            let pinned = *w.app_handle().state::<AppState>().pinned.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(win) = w.app_handle().get_webview_window(w.label()) { window::resized(&win, pinned); }
         } else if let WindowEvent::Focused(false) = e {
             let st = w.app_handle().state::<AppState>();
-            if *st.dialog_open.lock().unwrap() { return; }
-            if *st.pinned.lock().unwrap() {
+            if *st.dialog_open.lock().unwrap_or_else(std::sync::PoisonError::into_inner) { return; }
+            if *st.pinned.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
                 // 고정 중: 숨기지 않고, 사용자가 옮겨 간 앱을 붙여넣기·포커스 대상으로 기억
                 let app = w.app_handle().clone();
                 std::thread::spawn(move || {
@@ -803,8 +808,8 @@ fn main() {
                     let (pid, bundle) = system::frontmost();
                     if pid.is_some() && pid != Some(std::process::id() as i32) {
                         let st = app.state::<AppState>();
-                        *st.prev_pid.lock().unwrap() = pid;
-                        *st.prev_bundle.lock().unwrap() = bundle;
+                        *st.prev_pid.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = pid;
+                        *st.prev_bundle.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = bundle;
                     }
                 });
                 return;
@@ -812,9 +817,9 @@ fn main() {
             let _ = w.hide();
             // 단축키 입력 중에 창이 닫히면 단축키를 되살려야 Baro를 다시 열 수 있음
             let app = w.app_handle();
-            if *app.state::<AppState>().suspended.lock().unwrap() { register_hotkeys(app); }
+            if *app.state::<AppState>().suspended.lock().unwrap_or_else(std::sync::PoisonError::into_inner) { register_hotkeys(app); }
         })
-        .invoke_handler(tauri::generate_handler![search, icon, launch, open_path, reveal, files_wide, open_url, hide,
+        .invoke_handler(tauri::generate_handler![log_error, search, icon, launch, open_path, reveal, files_wide, open_url, hide,
             files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, notes_embed_build, save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,

@@ -59,17 +59,17 @@ pub fn init(file: &Path) {
         .map(|m| m.into_iter().map(|(k, v)| (k, Arc::new(v))).collect())
         .unwrap_or_default();
     // 예전 캐시에 비밀번호 노트 본문이 남아 있으면 다음 저장 때 지우도록
-    if map.values().any(|e| secret(&e.text)) { *DIRTY.lock().unwrap() = true; }
-    let mut c = CACHE.lock().unwrap();
+    if map.values().any(|e| secret(&e.text)) { *DIRTY.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true; }
+    let mut c = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if c.is_none() { *c = Some(map); }
 }
 
 // 바뀐 게 있으면 파일로 저장
 pub fn save() {
-    let mut dirty = DIRTY.lock().unwrap();
+    let mut dirty = DIRTY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !*dirty { return; }
     let Some(f) = FILE.get() else { return };
-    let snapshot: HashMap<String, Entry> = CACHE.lock().unwrap().as_ref()
+    let snapshot: HashMap<String, Entry> = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
         .map(|m| m.iter().filter(|(_, v)| !secret(&v.text)).map(|(k, v)| (k.clone(), (**v).clone())).collect()).unwrap_or_default();
     let Ok(b) = serde_json::to_vec(&snapshot) else { return };
     let tmp = f.with_extension("json.tmp");
@@ -91,7 +91,7 @@ pub fn scan(dir: &Path) -> Vec<Arc<Entry>> {
         .take(MAX_FILES)
         .filter_map(|e| Some((e.path().to_path_buf(), e.metadata().ok()?)))
         .collect();
-    let mut guard = CACHE.lock().unwrap();
+    let mut guard = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let cache = guard.get_or_insert_with(HashMap::new);
     let mut out = Vec::with_capacity(files.len());
     let mut changed = false;
@@ -113,7 +113,7 @@ pub fn scan(dir: &Path) -> Vec<Arc<Entry>> {
     let prefix = dir.to_string_lossy().into_owned();
     let before = cache.len();
     cache.retain(|k, _| !Path::new(k).starts_with(&prefix) || seen.contains(k));
-    if changed || cache.len() != before { *DIRTY.lock().unwrap() = true; }
+    if changed || cache.len() != before { *DIRTY.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true; }
     out
 }
 
@@ -164,7 +164,7 @@ mod tests {
         let f = d.join("cache.json");
         init(&f);
         scan(&d);
-        *DIRTY.lock().unwrap() = true;
+        *DIRTY.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
         save();
         let saved = std::fs::read_to_string(FILE.get().unwrap()).unwrap_or_default();
         if FILE.get() == Some(&f) { // 다른 테스트가 먼저 FILE을 정하지 않았을 때만 확인

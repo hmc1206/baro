@@ -78,7 +78,7 @@ fn load() -> HashMap<u64, Q> {
 }
 
 fn with<R>(f: impl FnOnce(&mut HashMap<u64, Q>) -> R) -> R {
-    let mut g = STORE.lock().unwrap();
+    let mut g = STORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     f(g.get_or_insert_with(load))
 }
 
@@ -115,7 +115,7 @@ pub fn has(k: u64) -> bool { with(|m| m.contains_key(&k)) }
 pub fn count() -> usize { with(|m| m.len()) }
 fn put(k: u64, v: Vec<f32>) { with(|m| { m.insert(k, quant(&v)); }); }
 // 파일이 있는지만 (메모리에 올리지 않고)
-pub fn exists() -> bool { STORE.lock().unwrap().as_ref().is_some_and(|m| !m.is_empty()) || FILE.get().is_some_and(|f| f.exists()) }
+pub fn exists() -> bool { STORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(|m| !m.is_empty()) || FILE.get().is_some_and(|f| f.exists()) }
 
 // 길이 1로 맞춘 벡터 (코사인 = 내적)
 fn unit(mut v: Vec<f32>) -> Vec<f32> {
@@ -164,7 +164,7 @@ mod tests {
         put(1, unit(vec![3.0, 4.0]));
         put(2, unit(vec![1.0, 0.0]));
         save(None);
-        *STORE.lock().unwrap() = None; // 다시 켠 것처럼
+        *STORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None; // 다시 켠 것처럼
         assert!((score(&[0.6, 0.8], 1).unwrap() - 1.0).abs() < 0.01);
         assert!((score(&[0.6, 0.8], 2).unwrap() - 0.6).abs() < 0.01);
         save(Some(&[2u64].into_iter().collect()));

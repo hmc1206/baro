@@ -178,7 +178,7 @@ export default function App() {
     { id: notes.search!.id, file: d.concept!.hubFile, index: d.concept!.hubIndex, text: d.concept!.hubText, value })
     .then(() => value !== "학습 전" && d.concept && !d.next ? stampStudied(d.file) : undefined)
     .then(reloadDocs).catch(failNote("상태를 바꾸지 못했어요"));
-  const failNote = (title: string) => (e: unknown) => { setAi(null); setView({ kind: "text", title, text: String(e), error: true }); };
+  const failNote = (title: string) => (e: unknown) => { invoke("log_error", { msg: `${title}: ${e}` }).catch(() => {}); setAi(null); setView({ kind: "text", title, text: String(e), error: true }); };
   const setStatus = (d: Doc, value: string) => (d.heading
     ? invoke("note_stage_status", { id: notes.search!.id, file: d.file, heading: d.heading, value })
     : invoke("note_set_field", { id: notes.search!.id, file: d.file, key: "status", value }))
@@ -836,6 +836,7 @@ export default function App() {
 
   const fail = (e: unknown) => {
     const msg = String(e);
+    invoke("log_error", { msg }).catch(() => {});
     setAi(null);
     setView(msg.startsWith("PERM:") ? { kind: "perm", perm: msg.slice(5) } : { kind: "text", title: "실행하지 못했어요", text: msg, error: true });
   };

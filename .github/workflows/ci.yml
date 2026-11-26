@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    # Baro는 macOS 전용 API(objc2, CGEvent)를 써서 macOS에서 빌드
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24  # tests/*.test.ts를 node가 바로 실행 (타입 제거 기본 지원)
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+      # tsc + vite build (tauri가 컴파일할 때 dist 폴더가 필요)
+      - run: npm run build
+      - run: npm test
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+      # 지금 있는 clippy 경고는 실패로 치지 않음 (출력만)
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy
