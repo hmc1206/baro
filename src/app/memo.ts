@@ -46,12 +46,13 @@ export function editTextOf(it: RecItem, sec: string): { text: string; time?: str
   if (lines[0].startsWith("```")) return { text: lines.slice(1, lines[lines.length - 1].startsWith("```") ? -1 : undefined).join("\n") };
   const body = [lines[0].slice(2), ...lines.slice(1).map(l => l.replace(/^ {1,2}|^\t/, ""))];
   if (sec === "daily") { const m = body[0].match(/^(\d\d:\d\d) ?(.*)$/); if (m) return { time: m[1], text: [m[2], ...body.slice(1)].join("\n") }; }
+  if (sec === "메모") { const m = body[0].match(/^(\d{4}-\d\d-\d\d \d\d:\d\d) ?(.*)$/); if (m) return { time: m[1], text: [m[2], ...body.slice(1)].join("\n") }; }
   if (sec === RECORD.cmd && body.length === 1) { const m = body[0].match(/^`([^`]*)`$/); if (m) return { text: m[1] }; }
   return { text: body.join("\n") };
 }
 // 고친 글 → 파일에 넣을 블록 (처음 저장할 때와 같은 모양)
 export function editBlockOf(sec: string, text: string, time?: string): string {
   const s = text.split("\n").map(l => l.trimEnd()).join("\n").trim();
-  if (sec === "daily") return listBlock(time ? `${time} ${s}` : s);
+  if (sec === "daily" || sec === "메모") return listBlock(time ? `${time} ${s}` : s);
   return sec === RECORD.cmd ? cmdBlock(s) : listBlock(s);
 }

@@ -466,9 +466,9 @@ fn insert_under(text: &str, heading: &str, block: &str) -> String {
     out.join("\n")
 }
 
-// 커리큘럼 단계 노트의 "내 기록" 칸(배운 점·막힌 점과 해결·사용한 명령어)에 기록 추가
+// 노트의 "내 기록" 칸(커리큘럼: 배운 점·막힌 점과 해결·사용한 명령어, 고른 노트: 메모)에 기록 추가
 pub fn add_record(dir: &str, file: &str, section: &str, block: &str) -> Result<(), String> {
-    if !["배운 점", "막힌 점과 해결", "사용한 명령어"].contains(&section) { return Err("기록할 칸 이름이 잘못됐어요.".into()); }
+    if !["배운 점", "막힌 점과 해결", "사용한 명령어", "메모"].contains(&section) { return Err("기록할 칸 이름이 잘못됐어요.".into()); }
     if block.trim().is_empty() { return Err("기록할 내용이 없어요.".into()); }
     let f = inside(dir, file)?;
     let text = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
@@ -572,7 +572,7 @@ fn daily_file(vault: &str, date: &str) -> Result<std::path::PathBuf, String> {
     Ok(Path::new(vault).join("03_Daily").join(format!("{date}.md")))
 }
 fn record_section(section: &str) -> Result<&str, String> {
-    if ["배운 점", "막힌 점과 해결", "사용한 명령어"].contains(&section) { Ok(section) } else { Err("기록할 칸 이름이 잘못됐어요.".into()) }
+    if ["배운 점", "막힌 점과 해결", "사용한 명령어", "메모"].contains(&section) { Ok(section) } else { Err("기록할 칸 이름이 잘못됐어요.".into()) }
 }
 
 pub fn remove_record(dir: &str, file: &str, section: &str, index: usize, first: &str) -> Result<(usize, String), String> {

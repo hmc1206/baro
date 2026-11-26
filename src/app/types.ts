@@ -22,6 +22,6 @@ export type Stage = { search: NoteSearch; doc: Doc };
 export type Shot = { source: "clip" | "file"; path: string | null; at: number; preview: string };
 export type Memo = { stage: Stage | null; from: Mode; saved: string | null; error: string | null; finding?: boolean; daily?: string; dailyDate?: string; shot?: Shot | null };
 // 지운 기록 (⌘Z로 되돌리기): sec는 "daily" 또는 칸 이름
-export type Removed = { sec: string; id: string; file: string; date: string; line: number; text: string };
+export type Removed = { sec: string; st: Stage | null; id: string; file: string; date: string; line: number; text: string };
 // 기록 항목: "- " 줄 + 들여쓴 이어지는 줄, 또는 ``` 코드 블록 하나 (Rust wiki::items_in과 같은 규칙 — 지울 때 번호가 맞아야 함)
 export type RecItem = { i: number; first: string; text: string };

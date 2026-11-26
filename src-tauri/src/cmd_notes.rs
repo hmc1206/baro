@@ -21,6 +21,7 @@ fn note_dir(app: &AppHandle, id: &str) -> Result<String, String> {
 // 다른 폴더(예: Network-Security/Hacking-Curriculum)에 있을 수 있어 Vault 전체
 fn record_dir(app: &AppHandle, id: &str) -> Result<String, String> {
     let c = config::load(&config_file(app))?;
+    if id == "__vault" { return Ok(c.vault_dir); } // 빠른 메모에서 고른 아무 노트
     let n = c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")?;
     Ok(if n.kind == "curriculum" && !c.vault_dir.is_empty() { c.vault_dir } else { n.dir })
 }

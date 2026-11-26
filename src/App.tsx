@@ -130,7 +130,7 @@ export default function App() {
   // 커리큘럼 미리보기의 체크박스 클릭 → 노트 파일에 체크/해제
   const onPreviewClick = (e: MouseEvent<HTMLElement>) => togglePreviewTask(e, curDoc, card);
   const { memo, crit, removed, delPending, setDelPending, editing, recRef, memoHtml,
-    openMemo, memoItems, onRecClick, undoRemove, cancelEdit, toggleShot, shotName } =
+    openMemo, memoItems, onRecClick, undoRemove, cancelEdit, toggleShot, shotName, picking, cancelPick, upDir } =
     useMemoScreen({ q, setQ, sel, setSel, mode, enter, input, notes, reloadDocs, conc, stampStudied });
   const loadClips = () => Promise.all([invoke<Clip[]>("clip_list"), invoke<boolean>("clip_enabled")])
     .then(([list, enabled]) => setClips({ list, enabled })).catch(() => {});
@@ -322,6 +322,7 @@ export default function App() {
     : mode === "clip" ? clipItems()
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
   const graphOn = mode === "note" && graph;
+  const memoPickAt = mode === "memo" ? items.findIndex(i => i.id === "memo-pick") : -1; // 빠른 메모: 저장할 곳 칸 수 (그 뒤는 고르기·사진·클립보드)
   // 창 크기 종류: 그래프는 가장 크게, 미리보기가 있는 화면·AI 답변은 넓게. 종류마다 사용자가 맞춘 크기를 기억
   const sizeKind = graphOn ? "graph" : ai || mode === "note" || mode === "memo" || mode === "clip" ? "wide" : "normal";
   useEffect(() => { invoke("set_view", { kind: sizeKind }); }, [sizeKind]);
@@ -424,9 +425,10 @@ export default function App() {
     const id = ++seq.current;
     setMenu(false); setPending(null); setPick(null);
     if (mode !== "memo") { setSel(restoreSel.current ?? 0); restoreSel.current = null; }
+    else if (picking) setSel(0); // 노트 고르기: 검색할 때마다 첫 결과
     else if (memo.stage && /^\s*!/.test(q)) setSel(crit.length + 1); // 막힌 점과 해결 (개념이면 완료 기준 칸 다음)
     else if (memo.stage && /^\s*\$/.test(q)) setSel(crit.length + 2); // 사용한 명령어
-    else if (q.trim()) setSel(s => s > crit.length + 3 ? 0 : s); // 사진·클립보드 칸에 있다가 입력을 시작하면 첫 칸으로
+    else if (q.trim()) setSel(s => s >= memoPickAt ? 0 : s); // 고르기·사진·클립보드 칸에 있다가 입력을 시작하면 첫 칸으로
     if (mode !== null) return;
     query(q, ui).then(r => {
       if (id !== seq.current) return;
@@ -557,6 +559,8 @@ export default function App() {
     if (e.metaKey && e.code === "KeyZ" && !q && removed) { e.preventDefault(); undoRemove(); return true; }
     if (e.key === "Escape" && delPending) { e.preventDefault(); setDelPending(null); return true; }
     if (e.key === "Escape" && editing) { e.preventDefault(); cancelEdit(); return true; }
+    if (e.key === "Escape" && picking) { e.preventDefault(); cancelPick(); return true; }
+    if (e.key === "Backspace" && picking && !q && upDir()) { e.preventDefault(); return true; } // 노트 고르기: 빈 입력에서 ⌫ = 상위 폴더
     if (e.metaKey && e.code === "KeyI") { e.preventDefault(); toggleShot(); return true; } // 방금 찍은 스크린샷 붙이기·빼기
     if (e.key === "Enter" && e.shiftKey) return true; // 줄바꿈
     if (e.key === "Tab") { e.preventDefault(); const n = items.length || 1; setSel(s => (s + (e.shiftKey ? n - 1 : 1)) % n); return true; }
@@ -656,14 +660,14 @@ export default function App() {
     : mode === "files" ? "파일 이름 (홈 · 외장 디스크)"
     : mode === "apps" ? "앱 이름 입력 · 예: Safari, 메모"
     : mode === "clip" ? "복사했던 글 검색"
-    : mode === "memo" ? (memo.shot ? "스크린샷 이름 겸 메모 · Enter 저장 · ⌘I 빼기" : "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 · ! 막힌 점 · $ 명령어 · ⌘O 노트 열기")
+    : mode === "memo" ? (picking ? "노트 이름 검색 (비우면 폴더 보기) · Esc 취소" : memo.shot ? "스크린샷 이름 겸 메모 · Enter 저장 · ⌘I 빼기" : "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 바꾸기")
     : hint || "앱, 파일, 명령, 계산, AI에게 묻기";
   const header = home ? "Baro로 할 수 있는 일"
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`
     : mode === "apps" ? (q.trim() ? `앱 ${appRows.length}개` : `설치된 앱 ${appRows.length}개`)
     : mode === "files" ? (found.loading ? "찾는 중…" : q.trim() ? `파일 ${found.items.length}개` : "파일 이름을 입력하세요 · Enter로 Finder에서 보기")
     : mode === "clip" ? (q.trim() ? `찾은 기록 ${items.filter(i => i.id.startsWith("clip-") && !["clip-toggle", "clip-clear"].includes(i.id)).length}개` : clips.enabled ? null : "기록을 멈춘 상태예요")
-    : mode === "memo" ? (memo.shot ? `스크린샷 붙임 · 저장 이름: ${now().date}-${shotName(q.replace(/^\s*[!$]/, ""))}` : memo.saved ? `✓ ${memo.saved}` : memo.finding ? "공부 중인 단계 찾는 중…" : memo.stage ? `지금 단계: ${memo.stage.doc.name}` : "공부 중인 커리큘럼 단계가 없어 Daily에 적어요")
+    : mode === "memo" ? (memo.shot ? `스크린샷 붙임 · 저장 이름: ${now().date}-${shotName(q.replace(/^\s*[!$]/, ""))}` : picking ? (q.trim() ? "전체에서 이름 검색 · Enter로 정하기" : `${picking.dir ? picking.dir.split("/").join(" / ") : "Vault"} · Enter 열기·정하기 · ⌫ 상위 폴더`) : memo.saved ? `✓ ${memo.saved}` : memo.stage ? `${memo.stage.doc.name}에 기록하기` : "저장할 곳 · Tab으로 바꾸기")
     : mode === "note" && conc ? (conc.loading ? "개념 노트 불러오는 중…" : `${conc.stage.category} · ${conc.stage.name} · 개념 ${conc.docs.length}개 · Esc 단계 목록`)
     : mode === "note" && (notes.loading || q.trim()) ? (notes.loading ? "노트 불러오는 중…" : `검색 결과 ${noteList.length}개`)
     : null;
