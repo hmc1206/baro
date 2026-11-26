@@ -490,97 +490,122 @@ export default function App() {
   };
 
   // 키 입력은 창 전체에서 받음: 마우스로 클릭해 입력창 포커스가 빠져도 Esc·Enter·방향키가 동작
-  const onKey = (e: KeyboardEvent) => {
+  // 화면별 함수가 차례로 받아 보고, 처리했으면 true를 돌려 다음 함수로 넘기지 않음 (순서가 곧 우선순위)
+
+  // 입력 화면(노트 검색 추가·수정, 비밀번호 수정·추가, 단축키 입력 중): 다른 키 처리보다 먼저
+  const keyForms = (e: KeyboardEvent): boolean => {
     // 노트 검색 추가·수정 화면: 입력칸은 그대로 두고 Esc(취소)·⌘↵(저장)·단축키 입력만 처리
     if (mode === "noteEdit" && draft) {
       if (draft.recording) {
         e.preventDefault();
-        if (e.key === "Escape") { invoke("suspend_hotkeys", { on: false }); setDraft({ ...draft, recording: false }); return; }
+        if (e.key === "Escape") { invoke("suspend_hotkeys", { on: false }); setDraft({ ...draft, recording: false }); return true; }
         const accel = accelOf(e);
         if (accel) { invoke("suspend_hotkeys", { on: false }); setDraft({ ...draft, hotkey: accel, recording: false }); }
-        return;
+        return true;
       }
       if (e.key === "Escape") { e.preventDefault(); setDraft(null); openNoteManager(); }
       else if (e.key === "Enter" && e.metaKey) { e.preventDefault(); saveDraft(); }
-      return;
+      return true;
     }
     // 비밀번호 수정·추가 화면: Esc(취소)·⌘↵(저장)
     if (mode === "pwEdit" && pw) {
       if (e.key === "Escape") { e.preventDefault(); setPw(null); setMode("note"); }
       else if (e.key === "Enter" && e.metaKey) { e.preventDefault(); savePw(); }
-      return;
+      return true;
     }
     // 단축키 입력 중: 다음에 누른 조합을 저장
     if (hk.recording) {
       e.preventDefault();
-      if (e.key === "Escape") { invoke("suspend_hotkeys", { on: false }); setHk(h => ({ ...h, recording: null })); return; }
+      if (e.key === "Escape") { invoke("suspend_hotkeys", { on: false }); setHk(h => ({ ...h, recording: null })); return true; }
       const accel = accelOf(e);
       if (accel) saveHotkey(hk.recording, accel);
-      return;
+      return true;
     }
-    if (document.activeElement !== input.current && !(view || ai)) input.current?.focus();
+    return false;
+  };
+
+  // 어느 화면에서나: ⌘P 창 고정, ⌘K 액션 패널, 한글 조합 중 키 무시
+  const keyGlobal = (e: KeyboardEvent): boolean => {
     // ⌘K: 한글 자판에선 e.key가 "ㅏ"라서 물리 키(e.code)로 판별
     // ⌘P: 창 고정·해제
-    if (e.metaKey && e.code === "KeyP") { e.preventDefault(); togglePin(); return; }
+    if (e.metaKey && e.code === "KeyP") { e.preventDefault(); togglePin(); return true; }
     if ((e.metaKey || e.ctrlKey) && e.code === "KeyK") {
       e.preventDefault();
-      if (ai || view) return;
+      if (ai || view) return true;
       if (cur) { setMenu(m => !m); setAsel(0); }
-      return;
+      return true;
     }
     // 한글 조합 중 키 입력은 무시 (WebKit은 isComposing 대신 keyCode 229를 줌)
-    if (e.isComposing || e.keyCode === 229) return;
-    if (view) {
-      // 결과·권한 화면: Enter는 (권한이면) 설정 열기 / 결과 복사, Esc는 돌아가기
-      if (e.key === "Escape") { setView(null); input.current?.select(); }
-      else if (e.key === "Enter") {
-        e.preventDefault();
-        if (view.kind === "perm" && view.perm !== "ok") invoke("open_settings", { kind: view.perm });
-        else if (view.kind === "text") navigator.clipboard.writeText(view.text);
-      }
-      return;
+    return e.isComposing || e.keyCode === 229;
+  };
+
+  // 결과·권한 화면: Enter는 (권한이면) 설정 열기 / 결과 복사, Esc는 돌아가기
+  const keyView = (e: KeyboardEvent): boolean => {
+    if (!view) return false;
+    if (e.key === "Escape") { setView(null); input.current?.select(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (view.kind === "perm" && view.perm !== "ok") invoke("open_settings", { kind: view.perm });
+      else if (view.kind === "text") navigator.clipboard.writeText(view.text);
     }
-    if (mode === "memo" && !view && !menu) {
-      if (e.metaKey && e.code === "KeyZ" && !q && removed) { e.preventDefault(); undoRemove(); return; }
-      if (e.key === "Escape" && delPending) { e.preventDefault(); setDelPending(null); return; }
-      if (e.key === "Escape" && editing) { e.preventDefault(); cancelEdit(); return; }
-      if (e.metaKey && e.code === "KeyI") { e.preventDefault(); toggleShot(); return; } // 방금 찍은 스크린샷 붙이기·빼기
-      if (e.key === "Enter" && e.shiftKey) return; // 줄바꿈
-      if (e.key === "Tab") { e.preventDefault(); const n = items.length || 1; setSel(s => (s + (e.shiftKey ? n - 1 : 1)) % n); return; }
-      if (q.includes("\n") && (e.key === "ArrowUp" || e.key === "ArrowDown")) return; // 여러 줄: 커서 이동
-    }
-    if (e.key === "Tab" && (mode === null || mode === "ask")) { e.preventDefault(); if (q.trim()) ask(q.trim()); return; }
-    if (ai) {
-      // AI 화면: Enter는 입력한 내용으로 다시 질문, ⇧Enter로 답변 복사
-      if (e.key === "Escape") { setAi(null); input.current?.select(); }
-      else if (e.metaKey && e.code === "KeyS") { e.preventDefault(); saveAi(); }
-      else if (e.metaKey && e.code === "KeyO" && ai.saved) { e.preventDefault(); invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(ai.saved)}` }); }
-      else if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); navigator.clipboard.writeText(ai.text); }
-      else if (e.key === "Enter" && e.metaKey) { e.preventDefault(); if (q.trim() && !ai.busy) askNotes(q.trim()); }
-      else if (e.key === "Enter") { e.preventDefault(); if (q.trim() && !ai.busy) (ai.notes ? askNotes : ask)(q.trim()); }
-      return;
-    }
+    return true;
+  };
+
+  // 빠른 메모: ⌘Z 되돌리기, Esc 취소, ⌘I 사진, ⇧Enter 줄바꿈, Tab 저장할 곳, 여러 줄일 때 ↑↓는 커서 이동
+  const keyMemo = (e: KeyboardEvent): boolean => {
+    if (mode !== "memo" || view || menu) return false;
+    if (e.metaKey && e.code === "KeyZ" && !q && removed) { e.preventDefault(); undoRemove(); return true; }
+    if (e.key === "Escape" && delPending) { e.preventDefault(); setDelPending(null); return true; }
+    if (e.key === "Escape" && editing) { e.preventDefault(); cancelEdit(); return true; }
+    if (e.metaKey && e.code === "KeyI") { e.preventDefault(); toggleShot(); return true; } // 방금 찍은 스크린샷 붙이기·빼기
+    if (e.key === "Enter" && e.shiftKey) return true; // 줄바꿈
+    if (e.key === "Tab") { e.preventDefault(); const n = items.length || 1; setSel(s => (s + (e.shiftKey ? n - 1 : 1)) % n); return true; }
+    return q.includes("\n") && (e.key === "ArrowUp" || e.key === "ArrowDown"); // 여러 줄: 커서 이동
+  };
+
+  // AI: 기본 검색·AI 화면의 Tab은 AI에게 묻기. 답변 화면에서 Enter 다시 질문, ⌘↵ 노트에게, ⇧Enter 답변 복사, ⌘S 저장, ⌘O 저장한 노트 열기
+  const keyAi = (e: KeyboardEvent): boolean => {
+    if (e.key === "Tab" && (mode === null || mode === "ask")) { e.preventDefault(); if (q.trim()) ask(q.trim()); return true; }
+    if (!ai) return false;
+    if (e.key === "Escape") { setAi(null); input.current?.select(); }
+    else if (e.metaKey && e.code === "KeyS") { e.preventDefault(); saveAi(); }
+    else if (e.metaKey && e.code === "KeyO" && ai.saved) { e.preventDefault(); invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(ai.saved)}` }); }
+    else if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); navigator.clipboard.writeText(ai.text); }
+    else if (e.key === "Enter" && e.metaKey) { e.preventDefault(); if (q.trim() && !ai.busy) askNotes(q.trim()); }
+    else if (e.key === "Enter") { e.preventDefault(); if (q.trim() && !ai.busy) (ai.notes ? askNotes : ask)(q.trim()); }
+    return true;
+  };
+
+  // 노트 검색·그래프: ⌘R 비밀번호 보이기, ⌘G 목록↔그래프, ⌘L 로컬 그래프, 그래프가 처리하는 키는 넘김
+  const keyNotes = (e: KeyboardEvent): boolean => {
     // ⌘R: 비밀번호 보이기·가리기
-    if (mode === "note" && notes.search?.kind === "passwords" && e.metaKey && e.code === "KeyR") { e.preventDefault(); setReveal(v => !v); return; }
+    if (mode === "note" && notes.search?.kind === "passwords" && e.metaKey && e.code === "KeyR") { e.preventDefault(); setReveal(v => !v); return true; }
     // ⌘G: 노트 목록 ↔ 그래프
-    if (mode === "note" && !conc && e.metaKey && e.code === "KeyG") { e.preventDefault(); setGraph(v => !v); setPick(null); setMenu(false); return; }
+    if (mode === "note" && !conc && e.metaKey && e.code === "KeyG") { e.preventDefault(); setGraph(v => !v); setPick(null); setMenu(false); return true; }
     // ⌘L: 로컬 그래프 끔 → 1단계 → 2단계 → 끔
-    if (graphOn && e.metaKey && e.code === "KeyL") { e.preventDefault(); setLocal(v => (v + 1) % 3); setMenu(false); return; }
+    if (graphOn && e.metaKey && e.code === "KeyL") { e.preventDefault(); setLocal(v => (v + 1) % 3); setMenu(false); return true; }
     // ⌥+방향키(이웃 노트로 이동)와 ⌘0(맞춤)은 그래프가 처리
-    if (graphOn && !menu && ((e.altKey && e.key.startsWith("Arrow")) || (e.metaKey && e.code === "Digit0"))) return;
-    // ⌘↵, ⌘O 같은 동작별 단축키
-    if (e.metaKey && cur && !menu) {
-      const sc = e.code === "Enter" ? "⌘↵" : e.code.startsWith("Key") ? `⌘${e.code.slice(3)}` : "";
-      const typed = input.current && input.current.selectionStart !== input.current.selectionEnd;
-      const a = sc === "⌘C" && typed ? undefined : cur.actions.find(x => x.shortcut === sc); // 입력창에서 글자를 골랐으면 ⌘C는 그 글자 복사
-      if (a) { e.preventDefault(); run(a); return; }
-      // ⌘↵: 고른 항목에 ⌘↵ 동작이 없으면 기본 검색·AI 화면에서는 "내 노트에게 묻기", 그 밖에는 아무것도 안 함 (Enter 동작으로 넘어가지 않게)
-      if (e.key === "Enter") {
-        e.preventDefault();
-        if ((mode === null || mode === "ask") && q.trim()) askNotes(q.trim());
-        return;
-      }
+    return graphOn && !menu && ((e.altKey && e.key.startsWith("Arrow")) || (e.metaKey && e.code === "Digit0"));
+  };
+
+  // ⌘↵, ⌘O 같은 고른 항목의 동작별 단축키
+  const keyShortcut = (e: KeyboardEvent): boolean => {
+    if (!e.metaKey || !cur || menu) return false;
+    const sc = e.code === "Enter" ? "⌘↵" : e.code.startsWith("Key") ? `⌘${e.code.slice(3)}` : "";
+    const typed = input.current && input.current.selectionStart !== input.current.selectionEnd;
+    const a = sc === "⌘C" && typed ? undefined : cur.actions.find(x => x.shortcut === sc); // 입력창에서 글자를 골랐으면 ⌘C는 그 글자 복사
+    if (a) { e.preventDefault(); run(a); return true; }
+    // ⌘↵: 고른 항목에 ⌘↵ 동작이 없으면 기본 검색·AI 화면에서는 "내 노트에게 묻기", 그 밖에는 아무것도 안 함 (Enter 동작으로 넘어가지 않게)
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if ((mode === null || mode === "ask") && q.trim()) askNotes(q.trim());
+      return true;
     }
+    return false;
+  };
+
+  // 목록(또는 ⌘K 액션 패널): ↑↓ 이동, Enter 실행, Esc 단계별로 물러나기
+  const keyList = (e: KeyboardEvent) => {
     const n = menu ? cur?.actions.length ?? 0 : items.length;
     const move = menu ? setAsel : setSel;
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !menu && pick) setPick(null);
@@ -592,6 +617,13 @@ export default function App() {
       if (pending) setPending(null); else if (menu) setMenu(false); else if (q) setQ("");
       else if (mode !== null) back(); else invoke("close_window");
     }
+  };
+
+  const onKey = (e: KeyboardEvent) => {
+    if (keyForms(e)) return;
+    if (document.activeElement !== input.current && !(view || ai)) input.current?.focus();
+    if (keyGlobal(e) || keyView(e) || keyMemo(e) || keyAi(e) || keyNotes(e) || keyShortcut(e)) return;
+    keyList(e);
   };
 
   const keyRef = useRef(onKey);
