@@ -729,6 +729,29 @@ async fn pick_folder(start: String, app: AppHandle, win: WebviewWindow) -> Optio
     picked.map(|p| p.to_string())
 }
 
+// 메뉴 막대(화면 오른쪽 위) 아이콘: Baro가 돌아가는지 보이고, 열기·로그·종료를 고를 수 있음
+fn tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    let open = MenuItem::with_id(app, "open", "Baro 열기", true, None::<&str>)?;
+    let logs = MenuItem::with_id(app, "logs", "로그 보기", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Baro 종료", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &logs, &PredefinedMenuItem::separator(app)?, &quit])?;
+    tauri::tray::TrayIconBuilder::with_id("baro")
+        .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
+        .icon_as_template(true) // 밝은·어두운 메뉴 막대에 맞춰 색이 바뀜
+        .tooltip(format!("Baro {} 실행 중", env!("CARGO_PKG_VERSION")))
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, e| match e.id().as_ref() {
+            "open" => if let Some(w) = app.get_webview_window("main") { toggle(&w, "baro"); },
+            "logs" => if let Some(p) = log::path() { let _ = open::that_detached(p); },
+            "quit" => { log::write("메뉴 막대에서 종료"); app.exit(0); }
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
+}
+
 fn main() {
     log::init();
     // 단축키는 설정 파일의 hotkeys에서 읽음 (기본: Baro ⌥Space, 리눅스 명령어 노트 검색 ⌥L). Baro의 "단축키 설정"에서 변경
@@ -761,6 +784,7 @@ fn main() {
             // Dock 아이콘·앱 전환기에서 숨김 (메뉴 막대 앱처럼 동작)
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            if let Err(e) = tray(app) { log::write(&format!("메뉴 막대 아이콘 실패: {e}")); }
             let h = app.handle().clone();
             for (action, e) in register_hotkeys(&h) { log::write(&format!("단축키 등록 실패 {action}: {e}")); }
             if let Ok(c) = config::load(&config_file(&h)) {

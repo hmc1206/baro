@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX: u64 = 1024 * 1024; // 1MB를 넘으면 baro.log.1로 돌림
 
-fn path() -> Option<PathBuf> {
+pub fn path() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join("Library/Logs/Baro/baro.log"))
 }
 
