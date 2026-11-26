@@ -3,33 +3,19 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
 import {
-  query, fileItems, storeItems, homeItems, aiItem, notesAiItem, iconFor, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
+  query, fileItems, storeItems, homeItems, aiItem, notesAiItem, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry,
 } from "./commands";
-import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, studyCard, Doc, NoteSearch, NoteKind, KIND_LABELS } from "./notes";
-import { ICONS } from "./icons";
+import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, studyCard, Doc, NoteSearch, KIND_LABELS } from "./notes";
 import { NoteGraph, linkInfo } from "./graph";
 import { PERMS, hotkeyLabels, fmtKey, accelOf } from "./app/keys";
 import type { Source, Ai, Store, Notes, Draft, Hk, PwDraft, Mode, Clip } from "./app/types";
-import { STATUS, HUB_STATES, weekLabel, docCache, docsSig, lastDoc } from "./app/status";
+import { STATUS, weekLabel, docCache, docsSig, lastDoc } from "./app/status";
 import { MASK, nextName, newPwNote, today, baseOf } from "./app/passwords";
 import { useMemoScreen } from "./app/useMemoScreen";
 import { useStudy, studyItem } from "./app/useStudy";
-import { clipDay, clipTime, pad, now } from "./app/memo";
-
-function Icon({ it }: { it: Item }) {
-  const [src, setSrc] = useState<string | null>(null);
-  useEffect(() => {
-    let live = true;
-    setSrc(null);
-    if (it.path) iconFor(it.path).then(s => { if (live) setSrc(s); });
-    return () => { live = false; };
-  }, [it.path]);
-  if (src) return <img className="icon" src={src} alt="" />;
-  const Svg = it.glyph ? ICONS[it.glyph] : undefined;
-  return <span className={`icon glyph ${it.kind}`}>{Svg ? <Svg size={15} strokeWidth={2.2} /> : (it.glyph ?? it.title[0])}</span>;
-}
-
+import { clipDay, clipTime, now } from "./app/memo";
+import { ItemList, ResultView, AiView, PwForm, SearchForm, MissingLinks, LinksPanel, MemoSide, ClipPreview, ActionMenu, Footer } from "./app/views";
 
 export default function App() {
   const [q, setQ] = useState("");
@@ -674,32 +660,12 @@ export default function App() {
     : mode === "clip" ? (!clips.list.length ? "아직 기록이 없어요. 글을 복사하면 여기에 쌓여요 (비밀번호·키처럼 보이는 글은 빼요)." : q.trim() && !items.length ? "일치하는 기록이 없어요." : null)
     : mode === null && q && !items.length ? "결과가 없습니다. 다른 이름으로 검색해 보세요." : null;
 
-  // 아직 노트가 없는 [[링크]]: 누르면 개념 노트를 만들어 Obsidian에서 열기
-  const missingEl = curDoc && curLinks?.missing.length ? (
-    <section>
-      <div className="links-head">{notes.search?.id === "__vault" ? "아직 없는 노트" : "이 폴더에 없는 노트"} {curLinks.missing.length} · 누르면 {notes.search?.id === "__vault" ? "개념 노트를 만들어요" : "Vault에서 찾아 열고, 없으면 개념 노트를 만들어요"}</div>
-      <div className="links-list">{curLinks.missing.map(n =>
-        <button key={n} className="link-item missing" title={`${n}.md 만들기`} onClick={() => createConcept(curDoc, n)}>+ {n}</button>)}</div>
-    </section>
-  ) : null;
-
-  const listEl = (
-    // 목록을 클릭해도 입력창 포커스를 유지
-    <ul className="list" role="listbox" ref={list} onMouseDown={e => e.preventDefault()}>
-      {header && <li className="section">{header}</li>}
-      {mode === "hotkeys" && hk.error && <li className="empty warn">{hk.error}</li>}
-      {items.map((it, i) => [
-        it.section && it.section !== items[i - 1]?.section && <li key={`s-${i}`} className="section">{it.section}</li>,
-        <li key={it.id} role="option" aria-selected={i === sel} className={i === sel ? "row on" : "row"}
-          // 클릭하면 선택(미리보기 전환), 선택된 항목을 다시 누르면 실행
-          onClick={() => menu ? undefined : sel !== i ? (setSel(i), setPending(null)) : run(it.actions[0], it)}>
-          <Icon it={it} />
-          <span className="title">{it.title}</span><span className="sub">{it.subtitle}</span>
-        </li>,
-      ])}
-      {empty && mode !== "hotkeys" && <li className="empty">{empty}</li>}
-    </ul>
-  );
+  const missingEl = curDoc && curLinks?.missing.length
+    ? <MissingLinks names={curLinks.missing} vault={notes.search?.id === "__vault"} onCreate={n => createConcept(curDoc, n)} /> : null;
+  const listEl = <ItemList listRef={list} header={header} items={items} sel={sel}
+    warn={mode === "hotkeys" ? hk.error : null} empty={mode !== "hotkeys" ? empty : null}
+    onRow={(it, i) => menu ? undefined : sel !== i ? (setSel(i), setPending(null)) : run(it.actions[0], it)} />;
+  const pickDoc = (d: Doc) => { setPick(d); setMenu(false); };
 
   return (
     <main className="panel">
@@ -710,139 +676,26 @@ export default function App() {
         rows={Math.min(6, q.split("\n").length)} onChange={e => setQ(e.target.value)} />
         : mode !== "noteEdit" && mode !== "pwEdit" && <input ref={input} className="search" value={q} autoFocus spellCheck={false} placeholder={placeholder}
         onChange={e => setQ(e.target.value)} />}
-      {view ? (
-        <section className="ai-view">
-          {perm ? <>
-            <div className="view-title">{perm.title}</div>
-            <p className="ai-a">{perm.body}</p>
-          </> : view.kind === "text" && <>
-            <div className="view-title">{view.title}</div>
-            <p className={view.error ? "ai-err" : "ai-a mono"}>{view.text}</p>
-          </>}
-        </section>
-      ) : ai ? (
-        <section className="ai-view">
-          <div className="ai-q"><span className="icon glyph ai">{(() => { const S = ICONS[ai.notes ? "notesAi" : "ai"]; return <S size={15} strokeWidth={2.2} />; })()}</span>{ai.q}</div>
-          {ai.error ? <p className="ai-err">{ai.error}</p>
-            : <p className="ai-a">{ai.text}{ai.busy && <span className="caret" />}</p>}
-          {ai.notes && !!ai.sources?.length && (
-            <div className="links ai-sources">
-              <div className="links-head">찾은 노트 {ai.sources.length} · 클릭하면 Obsidian에서 열기</div>
-              <div className="links-list">{ai.sources.map((s, i) =>
-                <button key={s.file} className="link-item" title={s.file} onClick={() => openObsidian(s.file)}>[{i + 1}] {s.title}</button>)}</div>
-            </div>
-          )}
-          {ai.notes && ai.busy && !ai.sources?.length && !ai.text && <p className="ai-saved">노트에서 찾는 중…</p>}
-          {ai.saved && <p className="ai-saved">저장했어요: {ai.saved.replace(/^.*\/MyBrain\//, "")}</p>}
-          {ai.saveError && <p className="ai-err">{ai.saveError}</p>}
-        </section>
-      ) : mode === "pwEdit" && pw ? (
-        <form className="form" onSubmit={e => { e.preventDefault(); savePw(); }}>
-          <div className="view-title">{pw.doc ? `${pw.doc.name} 비밀번호 수정` : "새 항목 추가"}</div>
-          {!pw.doc && <>
-            <label>파일 이름 <span className="hint">{notes.search?.name} 폴더에 만들어요. 앞 노트의 머리말(level·login·ssh)을 번호만 바꿔 이어받아요</span>
-              <input autoFocus value={pw.name} onChange={e => setPw({ ...pw, name: e.target.value })} />
-            </label>
-            <label>제목
-              <input value={pw.title} placeholder="예: Bandit Level 24 — 쉘 스크립트 작성" onChange={e => setPw({ ...pw, title: e.target.value })} />
-            </label>
-          </>}
-          <label>비밀번호 <span className="hint">노트 머리말 password만 바뀌고 본문은 그대로예요</span>
-            <input autoFocus={!!pw.doc} className="mono" value={pw.password} spellCheck={false} autoComplete="off" onFocus={e => e.target.select()}
-              onChange={e => setPw({ ...pw, password: e.target.value })} />
-          </label>
-          {pw.error && <p className="ai-err">{pw.error}</p>}
-          <div className="form-actions">
-            <button type="button" onClick={() => { setPw(null); setMode("note"); }}>취소 <kbd>esc</kbd></button>
-            <button type="submit" className="primary" disabled={pw.saving}>{pw.saving ? "저장 중…" : "저장"} <kbd>⌘</kbd><kbd>↵</kbd></button>
-          </div>
-        </form>
-      ) : mode === "noteEdit" && draft ? (
-        <form className="form" onSubmit={e => { e.preventDefault(); saveDraft(); }}>
-          <div className="view-title">{draft.id ? "노트 검색 수정" : "새 노트 검색"}</div>
-          <label>이름
-            <input autoFocus value={draft.name} placeholder="예: 쿠버네티스 명령어" onChange={e => setDraft({ ...draft, name: e.target.value })} />
-          </label>
-          <label>Obsidian 폴더 <span className="hint">하위 폴더까지 읽어요</span>
-            <span className="inline">
-              <input value={draft.dir} placeholder="/Volumes/Disk/MyBrain/..." onChange={e => setDraft({ ...draft, dir: e.target.value })} />
-              <button type="button" onClick={pickFolder}>폴더 선택…</button>
-            </span>
-          </label>
-          <div className="field">방식
-            <div className="kinds">
-              {(Object.keys(KIND_LABELS) as NoteKind[]).map(k => {
-                const K = ICONS[KIND_LABELS[k].glyph];
-                return (
-                  <button type="button" key={k} className={draft.kind === k ? "kind on" : "kind"} onClick={() => setDraft({ ...draft, kind: k })}>
-                    <span className="kind-title">{K && <K size={14} />} {KIND_LABELS[k].title}</span>
-                    <span className="hint">{KIND_LABELS[k].desc}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="field">단축키
-            <span className="inline">
-              <button type="button" className={draft.recording ? "rec on" : "rec"}
-                onClick={async () => { await invoke("suspend_hotkeys", { on: true }); setDraft({ ...draft, recording: true }); }}>
-                {draft.recording ? "새 단축키를 누르세요 · Esc 취소" : fmtKey(draft.hotkey) || "지정 안 함 (클릭해서 지정)"}
-              </button>
-              {draft.hotkey && !draft.recording && <button type="button" onClick={() => setDraft({ ...draft, hotkey: "" })}>지우기</button>}
-            </span>
-          </div>
-          {draft.error && <p className="ai-err">{draft.error}</p>}
-          <div className="form-actions">
-            <button type="button" onClick={() => { setDraft(null); openNoteManager(); }}>취소 <kbd>esc</kbd></button>
-            <button type="submit" className="primary" disabled={draft.saving}>{draft.saving ? "저장 중…" : "저장"} <kbd>⌘</kbd><kbd>↵</kbd></button>
-          </div>
-        </form>
-      ) : graphOn ? (
+      {view ? <ResultView view={view} perm={perm} />
+      : ai ? <AiView ai={ai} onOpen={openObsidian} />
+      : mode === "pwEdit" && pw ? <PwForm pw={pw} setPw={setPw} folder={notes.search?.name} onSave={savePw} onCancel={() => { setPw(null); setMode("note"); }} />
+      : mode === "noteEdit" && draft ? <SearchForm draft={draft} setDraft={setDraft} onSave={saveDraft} onCancel={() => { setDraft(null); openNoteManager(); }} onPickFolder={pickFolder} />
+      : graphOn ? (
         // 노트 그래프: 왼쪽 그래프 + 오른쪽 미리보기. 검색어는 맞는 노트만 진하게
         <div className="split">
           <NoteGraph docs={graphDocs} matches={graphMatches} selected={curDoc?.record ?? curDoc} loading={notes.loading} cacheKey={notes.search?.id ?? ""} local={local}
-            onSelect={d => { setPick(d); setMenu(false); }}
-            onOpen={d => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` })} />
+            onSelect={pickDoc} onOpen={d => openObsidian(d.file)} />
           <div className="preview" key={curDoc?.file /* 다른 노트로 바뀌면 맨 위부터 */}>
             <article className="md" dangerouslySetInnerHTML={{ __html: previewHtml }} />
-            {curLinks && (
-              <div className="links">
-                {([["이 노트로 오는 링크", curLinks.inn], ["이 노트에서 가는 링크", curLinks.out]] as [string, Doc[]][]).map(([title, ds]) => (
-                  <section key={title}>
-                    <div className="links-head">{title} {ds.length}</div>
-                    {ds.length ? <div className="links-list">{ds.map(d =>
-                      <button key={d.file} className="link-item" title={d.file} onClick={() => { setPick(d); setMenu(false); }}>{d.name}</button>)}</div>
-                      : <div className="links-none">없음</div>}
-                  </section>
-                ))}
-                {missingEl}
-              </div>
-            )}
+            {curLinks && <LinksPanel inn={curLinks.inn} out={curLinks.out} missing={missingEl} onPick={pickDoc} />}
           </div>
         </div>
       ) : mode === "memo" ? (
         // 빠른 메모: 왼쪽 저장할 곳 + 오른쪽 이미 적은 기록 (고른 칸 강조)
-        <div className="split">
-          {listEl}
-          {memo.shot ? (
-            <div className="preview memo-side">
-              <figure className="shot"><img src={memo.shot.preview} alt="붙인 스크린샷" />
-                <figcaption>{memo.shot.source === "clip" ? "클립보드 이미지" : "스크린샷 파일 (저장하면 원본은 휴지통으로)"} · ⌘I 빼기</figcaption></figure>
-              <article ref={recRef} className="md memo-rec" onClick={onRecClick} dangerouslySetInnerHTML={{ __html: memoHtml }} />
-            </div>
-          ) : <article ref={recRef} className="preview md memo-rec" onClick={onRecClick} dangerouslySetInnerHTML={{ __html: memoHtml }} />}
-        </div>
+        <div className="split">{listEl}<MemoSide shot={memo.shot} recRef={recRef} html={memoHtml} onRecClick={onRecClick} /></div>
       ) : mode === "clip" ? (
         // 클립보드 기록: 왼쪽 목록 + 오른쪽 전체 내용
-        <div className="split">
-          {listEl}
-          <article className="preview clip-view">
-            {curClip ? <>
-              <pre>{curClip.text}</pre>
-              <p className="clip-meta">{clipDay(curClip.at)} {clipTime(curClip.at)}{curClip.app && ` · ${curClip.app}`} · {curClip.text.length.toLocaleString()}자</p>
-            </> : <p className="clip-meta">{cur?.subtitle}</p>}
-          </article>
-        </div>
+        <div className="split">{listEl}<ClipPreview clip={curClip} fallback={cur?.subtitle} /></div>
       ) : mode === "note" ? (
         // 노트 검색: 왼쪽 목록 + 오른쪽 노트 미리보기 (+ 아직 없는 링크로 개념 노트 만들기)
         <div className="split">
@@ -854,35 +707,8 @@ export default function App() {
           </div>
         </div>
       ) : listEl}
-      {menu && cur && !ai && !view && (
-        <div className="menu" role="menu">
-          <div className="menu-head">{cur.title}</div>
-          {cur.actions.map((a, i) => (
-            <div key={a.title} role="menuitem" className={i === asel ? "act on" : "act"}
-              onMouseMove={() => setAsel(i)} onMouseDown={e => { e.preventDefault(); run(a); }}>
-              <span>{a.title}</span>
-              <span>{i === 0 ? <kbd>↵</kbd> : a.shortcut && [...a.shortcut].map(k => <kbd key={k}>{k}</kbd>)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {/* 하단 막대: 끌어서 창을 옮김. "deep"이라 막대 안 글자·키 표시 위를 눌러도 끌림 (핀 버튼은 제외) */}
-      <footer className="foot" data-tauri-drag-region="deep" title="하단 막대를 끌어 창 이동 · 가장자리를 끌어 크기 조절 (화면 종류마다 기억)">
-        {pending ? <span className="warn">{pending.confirm}</span> : <span className="brand">
-          <button className={pinned ? "pin on" : "pin"} title={pinned ? "고정 해제 (⌘P)" : "창 고정 (⌘P)"}
-            onMouseDown={e => e.preventDefault()} onClick={togglePin}>
-            {(() => { const P = ICONS[pinned ? "pin" : "pinOff"]; return <P size={13} strokeWidth={2.2} />; })()}
-          </button>
-          Baro{pinned && <span className="pinned-hint"> · 고정됨</span>}
-        </span>}
-        {!pending && <span className="keys">
-          {footerKeys.filter(([label]) => label).map(([label, keys], i) => (
-            <span key={label} className={label === "액션" && menu ? "on" : ""}>
-              {i > 0 && <span className="sep" />}{label} {keys.map(k => <kbd key={k}>{k}</kbd>)}
-            </span>
-          ))}
-        </span>}
-      </footer>
+      {menu && cur && !ai && !view && <ActionMenu item={cur} asel={asel} setAsel={setAsel} run={a => run(a)} />}
+      <Footer pending={pending} pinned={pinned} togglePin={togglePin} keys={footerKeys} menu={menu} />
     </main>
   );
 }
