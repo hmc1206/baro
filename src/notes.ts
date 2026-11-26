@@ -125,8 +125,26 @@ function section(chapters: Map<string, string>, file: string, heading: string) {
   return lines.slice(i, j).join("\n").replace(/^(#{1,5}) /gm, (_, h: string) => `${h}# `);
 }
 
+// Obsidian 콜아웃("> [!tip]- 제목" + "> 내용")을 미리보기용으로: 접히는 것(-/+)은 <details>, 아니면 굵은 제목 인용
+export function callouts(md: string): string {
+  const lines = md.split("\n"), out: string[] = [];
+  let fence = "";
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i], f = l.trim().match(/^(```|~~~)/)?.[1];
+    if (f && !l.startsWith(">")) fence = !fence ? f : f === fence ? "" : fence;
+    const m = !fence && l.match(/^>\s*\[!([\w-]+)\]([-+]?)\s*(.*)$/);
+    if (!m) { out.push(l); continue; }
+    const body: string[] = [];
+    while (i + 1 < lines.length && lines[i + 1].startsWith(">")) body.push(lines[++i].replace(/^>\s?/, ""));
+    const title = m[3].trim() || m[1];
+    out.push(m[2] ? `<details${m[2] === "+" ? " open" : ""}><summary>${title}</summary>\n\n${body.join("\n")}\n\n</details>\n`
+      : [`> **${title}**`, ...body.map(b => `> ${b}`)].join("\n"));
+  }
+  return out.join("\n");
+}
+
 function toMarkdown(body: string, chapters: Map<string, string>) {
-  const out = body.split("\n").map(line => {
+  const out = callouts(body).split("\n").map(line => {
     const m = line.match(/^!\[\[([^#\]]+)#([^\]]+)\]\]$/) || line.match(/^원본 위치: \[\[([^\]]+)\]\] → \*\*(.+)\*\* 절$/);
     const sec = m ? section(chapters, m[1], m[2]) : "";
     return sec ? `> 출처: ${m![1]}\n\n${sec}` : line;
@@ -483,7 +501,7 @@ export function criterionHints(d: Doc, label: string): string {
   const want = /검증/.test(label) ? /^(What|Why|How|Syntax|Example|Code|Practice)\b/
     : /설명/.test(label) ? /^(What|Why|How|Real World)\b/
     : /재현/.test(label) ? /^(Syntax|Example|Code|Practice)\b/ : /^(What|Why|How)\b/;
-  return secs.filter(s => want.test(s.title) && s.body.trim()).map(s => `**${s.title}**\n\n${s.body.trim()}`).join("\n\n");
+  return callouts(secs.filter(s => want.test(s.title) && s.body.trim()).map(s => `**${s.title}**\n\n${s.body.trim()}`).join("\n\n"));
 }
 
 export function studyCard(d: Doc): { md: string; taskMap: number[] } {

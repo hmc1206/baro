@@ -1,7 +1,7 @@
 // 커리큘럼 허브 해석·다음 할 일·개념 검색·공부 카드 테스트 (npm test)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hubStages, conceptsOf, nextUp, conceptHits, studyCard, criteriaOf, criterionHints, expectations, questionsOf, evidencePlan, addDays, byStage, type Doc, type Criterion } from "../src/notes.ts";
+import { hubStages, conceptsOf, nextUp, conceptHits, studyCard, criteriaOf, criterionHints, callouts, expectations, questionsOf, evidencePlan, addDays, byStage, type Doc, type Criterion } from "../src/notes.ts";
 
 const fe = `---
 type: curriculum-hub
@@ -202,4 +202,11 @@ test("공부 카드: 완료 기준에 단 증거는 ④가 아니라 ⑤의 그 
   const four = md.slice(md.indexOf("④"), md.indexOf("⑤")), five = md.slice(md.indexOf("⑤"));
   assert.ok(!four.includes("Server") && five.includes("Server: 1.1.1.1") && five.includes("example.com"), md);
   assert.deepEqual(taskMap, [0, 1]);
+});
+
+test("callouts: 접히는 콜아웃은 details, 코드 블록 안은 그대로", () => {
+  const md = callouts(["> [!success]- 이렇게 나오면 맞음", "> 첫 줄", "> ```text", "> * ok", "> ```", "다음 문단", "> [!note] 참고", "> 내용", "```", "> [!tip]- 코드 안", "```"].join("\n"));
+  assert.match(md, /^<details><summary>이렇게 나오면 맞음<\/summary>\n\n첫 줄\n```text\n\* ok\n```\n\n<\/details>/);
+  assert.match(md, /다음 문단\n> \*\*참고\*\*\n> 내용/);
+  assert.match(md, /```\n> \[!tip\]- 코드 안\n```/);
 });
