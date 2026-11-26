@@ -296,11 +296,13 @@ export async function fileItems(q: string, wide = false): Promise<Item[]> {
     const p = p0.normalize("NFC");
     const name = p.split("/").pop() ?? p;
     const dir = p.slice(0, p.length - name.length - 1).replace(/^\/Users\/[^/]+/, "~");
-    const open: Action = { title: "열기", shortcut: wide ? "⌘O" : undefined, run: () => invoke("open_path", { path: p0 }) };
+    const open: Action = { title: "열기", run: () => invoke("open_path", { path: p0 }) };
+    // 파일 찾기 화면 ⌘O: Obsidian에서 열기 (Vault 밖 파일이면 Obsidian이 알려 줌)
+    const obsidian: Action = { title: "Obsidian에서 열기", shortcut: "⌘O", run: () => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(p0)}` }) };
     const finder: Action = { title: "Finder에서 보기", run: () => invoke("reveal", { path: p0 }) };
     const path: Action = { title: "경로 복사", shortcut: wide ? "⌘C" : undefined, run: () => copy(p0) };
     return { id: `f-${p}`, title: name, subtitle: dir, kind: "file" as const, path: p0,
-      actions: wide ? [finder, open, path] : [open, finder, path] };
+      actions: wide ? [finder, obsidian, open, path] : [open, finder, path] };
   });
 }
 
