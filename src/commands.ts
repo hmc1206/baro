@@ -20,7 +20,7 @@ export type StoreEntry = { id: string; name: string; description: string; versio
 // 목록 밖의 화면: 텍스트 결과, 권한 안내
 export type View = { kind: "text"; title: string; text: string; error?: boolean } | { kind: "perm"; perm: string };
 // 화면(App)이 넘겨주는 동작들
-export type Ui = { ask: (q: string) => void; askNotes: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openClip: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void };
+export type Ui = { ask: (q: string) => void; askNotes: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openClip: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void; openApps: () => void; setHint: (hint: string) => void };
 
 const isMac = navigator.userAgent.includes("Mac");
 let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, note_searches: [], error: null };
@@ -212,14 +212,14 @@ export function storeItems(q: string, entries: StoreEntry[], refresh: () => void
   });
 }
 
-// 처음 화면: Baro로 할 수 있는 일. Enter를 누르면 예시를 입력하거나 바로 실행
+// 처음 화면: Baro로 할 수 있는 일. Enter를 누르면 입력창에 예시를 흐리게 보여 주거나 바로 실행
 export function homeItems(ui: Ui): Item[] {
   const ex = (id: string, glyph: string, kind: Kind, title: string, subtitle: string, example: string): Item =>
-    ({ id: `home-${id}`, title, subtitle, kind, glyph, actions: [{ title: "예시 입력", keep: true, run: async () => ui.setQuery(example) }] });
+    ({ id: `home-${id}`, title, subtitle, kind, glyph, actions: [{ title: "입력하기", keep: true, run: async () => ui.setHint(`예: ${example.trim()}`) }] });
   const go = (id: string, glyph: string, kind: Kind, title: string, subtitle: string, label: string, run: () => Promise<unknown>, keep = false): Item =>
     ({ id: `home-${id}`, title, subtitle, kind, glyph, actions: [{ title: label, keep, run }] });
   return [
-    ex("apps", "app", "app", "앱 실행", "앱 이름 입력 · 예: 사파리", "사파리"),
+    go("apps", "app", "app", "앱 실행", "설치된 앱 전체 보기 · 이름으로 좁히기", "열기", async () => ui.openApps(), true),
     go("files", "file", "cmd", "파일 찾기", "홈 · 외장 디스크에서 이름으로 찾고 Finder로 위치 보기", "열기", async () => ui.openFiles(), true),
     go("memo", "memo", "cmd", "빠른 메모", "오늘 Daily나 공부 중인 단계의 내 기록에 한 줄 적기", "열기", async () => ui.openMemo(), true),
     go("clip", "clip", "cmd", "클립보드 기록", "복사했던 글을 다시 찾아 붙여넣기", "열기", async () => ui.openClip(), true),
@@ -256,6 +256,16 @@ export function notesAiItem(q: string, askNotes: (q: string) => void): Item | nu
     actions: [{ title: "내 노트에게 묻기", keep: true, run: async () => askNotes(q) }] };
 }
 
+export const appItem = (a: AppEntry): Item => ({ id: a.path, title: a.name, subtitle: "앱", kind: "app", path: a.path, actions: [
+  { title: "열기", run: () => invoke("launch", { path: a.path }) },
+  { title: isMac ? "Finder에서 보기" : "폴더에서 보기", run: () => invoke("reveal", { path: a.path }) },
+  { title: "경로 복사", run: () => copy(a.path) },
+  { title: "이름 복사", run: () => copy(a.name) },
+] });
+
+// 앱 실행 화면: 입력이 없으면 전체 앱
+export const appList = async (q: string): Promise<Item[]> => (await invoke<AppEntry[]>("apps", { q }).catch(() => [] as AppEntry[])).map(appItem);
+
 // 빠른 결과(top) / 마지막에 붙는 항목(bottom). 파일 검색 결과는 그 사이에 따로 들어감
 export async function query(q: string, ui: Ui): Promise<{ top: Item[]; bottom: Item[] }> {
   q = q.trim();
@@ -271,12 +281,7 @@ export async function query(q: string, ui: Ui): Promise<{ top: Item[]; bottom: I
   const appFirst = q.length < 2 || apps.some(a => [a.name, a.alias].some(n => n.toLowerCase().startsWith(q.toLowerCase())));
   const strong = appFirst ? [] : cmds.filter(x => x.s >= 3);
   top.push(...strong.map(x => x.item));
-  apps.forEach(a => top.push({ id: a.path, title: a.name, subtitle: "앱", kind: "app", path: a.path, actions: [
-    { title: "열기", run: () => invoke("launch", { path: a.path }) },
-    { title: isMac ? "Finder에서 보기" : "폴더에서 보기", run: () => invoke("reveal", { path: a.path }) },
-    { title: "경로 복사", run: () => copy(a.path) },
-    { title: "이름 복사", run: () => copy(a.name) },
-  ] }));
+  top.push(...apps.map(appItem));
   top.push(...cmds.filter(x => !strong.includes(x)).map(x => x.item), ...snippets(q));
   const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
   const bottom: Item[] = [{ id: "web", title: `"${q}" 웹에서 검색`, subtitle: "Google", kind: "web", glyph: "globe", actions: [

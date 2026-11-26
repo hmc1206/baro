@@ -105,6 +105,18 @@ fn search(q: String, st: State<AppState>) -> Vec<indexer::AppEntry> {
     search::rank(&st.apps.lock().unwrap_or_else(std::sync::PoisonError::into_inner), &st.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner), &q, 8)
 }
 
+// 앱 실행 화면: 입력이 없으면 전체 앱(자주 쓴 순 → 이름순), 있으면 일치하는 앱 전부
+#[tauri::command]
+fn apps(q: String, st: State<AppState>) -> Vec<indexer::AppEntry> {
+    let list = st.apps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let usage = st.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !q.trim().is_empty() { return search::rank(&list, &usage, q.trim(), list.len()); }
+    let mut v = list.clone();
+    v.sort_by(|a, b| usage.get(&b.path).unwrap_or(&0).cmp(usage.get(&a.path).unwrap_or(&0))
+        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    v
+}
+
 // 아이콘을 data URL로 반환. 캐시에 없으면 그 자리에서 만듦 (async라 메인 스레드를 막지 않음)
 #[tauri::command]
 async fn icon(path: String, app: AppHandle) -> Option<String> {
@@ -565,7 +577,7 @@ fn main() {
             let app = w.app_handle();
             if *app.state::<AppState>().suspended.lock().unwrap_or_else(std::sync::PoisonError::into_inner) { register_hotkeys(app); }
         })
-        .invoke_handler(tauri::generate_handler![log_error, search, icon, launch, open_path, reveal, files_wide, open_url, hide,
+        .invoke_handler(tauri::generate_handler![log_error, search, apps, icon, launch, open_path, reveal, files_wide, open_url, hide,
             files, get_config, open_config, system_cmd, paste, window_layout, cmd_ai::ask_ai, cmd_ai::ask_notes, cmd_ai::notes_embed_build, cmd_ai::save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,

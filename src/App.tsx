@@ -5,6 +5,7 @@ import { marked } from "marked";
 import {
   query, fileItems, storeItems, homeItems, aiItem, notesAiItem, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry,
+  appList,
 } from "./commands";
 import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, studyCard, Doc, NoteSearch, KIND_LABELS } from "./notes";
 import { NoteGraph, linkInfo } from "./graph";
@@ -23,6 +24,8 @@ export default function App() {
   const [bottom, setBottom] = useState<Item[]>([]);
   const [files, setFiles] = useState<Item[]>([]);
   const [found, setFound] = useState<{ items: Item[]; loading: boolean }>({ items: [], loading: false }); // 파일 찾기 화면 결과
+  const [appRows, setAppRows] = useState<Item[]>([]); // 앱 실행 화면 결과
+  const [hint, setHint] = useState(""); // 처음 화면 기능을 고르면 입력창에 흐리게 보이는 예시
   const [sel, setSel] = useState(0);
   const [menu, setMenu] = useState(false); // ⌘K 액션 패널
   const [asel, setAsel] = useState(0);
@@ -92,7 +95,7 @@ export default function App() {
       loadConfig().then(() => setRev(r => r + 1));
     } catch (e) { setAi(a => a && a.id === id ? { ...a, saveError: String(e) } : a); }
   };
-  const enter = (m: Mode) => { setQ(""); setView(null); setAi(null); setMode(m); input.current?.focus(); };
+  const enter = (m: Mode) => { setQ(""); setHint(""); setView(null); setAi(null); setMode(m); input.current?.focus(); };
   const openStore = () => {
     enter("store");
     setStore(s => ({ ...s, loading: true, error: null }));
@@ -211,6 +214,8 @@ export default function App() {
     ask, askNotes, openStore, openNotes, openGraph, openFiles, openMemo: () => openMemo(), openClip, openNoteManager, openHotkeys, togglePin,
     show: v => { setAi(null); setView(v); },
     setQuery: text => { setQ(text); input.current?.focus(); },
+    openApps: () => enter("apps"),
+    setHint: text => { setQ(""); setHint(text); input.current?.focus(); },
   };
 
   // 노트 검색: 검색어가 없으면 분류(폴더)별 전체, 있으면 점수순
@@ -312,6 +317,7 @@ export default function App() {
     : mode === "store" ? storeItems(q, store.entries, () => setRev(r => r + 1), ui)
     : mode === "ask" ? (q.trim() ? [aiItem(q.trim(), ask, askNotes), ...[notesAiItem(q.trim(), askNotes)].filter((x): x is Item => !!x)] : [])
     : mode === "files" ? found.items
+    : mode === "apps" ? appRows
     : mode === "memo" ? memoItems()
     : mode === "clip" ? clipItems()
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
@@ -437,6 +443,14 @@ export default function App() {
       fileItems(q).then(f => { if (id === seq.current) setFiles(f); });
     }, 180);
     return () => clearTimeout(t);
+  }, [q, mode]);
+
+  // 앱 실행 화면: 입력이 없으면 전체 앱, 있으면 일치하는 앱
+  useEffect(() => {
+    if (mode !== "apps") return;
+    let live = true;
+    appList(q.trim()).then(items => { if (live) { setAppRows(items); setSel(0); } });
+    return () => { live = false; };
   }, [q, mode]);
 
   // 파일 찾기 화면: 입력이 멈추면 홈 + 외장 디스크 검색
@@ -598,9 +612,9 @@ export default function App() {
     if (e.key === "ArrowDown") { e.preventDefault(); setPending(null); move(s => Math.min(s + 1, n - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setPending(null); move(s => Math.max(s - 1, 0)); }
     else if (e.key === "Enter") { e.preventDefault(); run(menu ? cur?.actions[asel] : cur?.actions[0]); }
-    // Esc: 확인 취소 → 액션 패널 닫기 → 입력 지우기 → 이전 화면 → 창 닫기
+    // Esc: 확인 취소 → 액션 패널 닫기 → 입력 지우기 → 예시 지우기 → 이전 화면 → 창 닫기
     else if (e.key === "Escape") {
-      if (pending) setPending(null); else if (menu) setMenu(false); else if (q) setQ("");
+      if (pending) setPending(null); else if (menu) setMenu(false); else if (q) setQ(""); else if (hint) setHint("");
       else if (mode !== null) back(); else invoke("close_window");
     }
   };
@@ -640,11 +654,13 @@ export default function App() {
     : mode === "hotkeys" ? "단축키 설정"
     : mode === "ask" ? "AI에게 물어보기 (Enter · ⌘↵ 내 노트에서 찾아 묻기)"
     : mode === "files" ? "파일 이름 (홈 · 외장 디스크)"
+    : mode === "apps" ? "앱 이름 입력 · 예: Safari, 메모"
     : mode === "clip" ? "복사했던 글 검색"
     : mode === "memo" ? (memo.shot ? "스크린샷 이름 겸 메모 · Enter 저장 · ⌘I 빼기" : "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 · ! 막힌 점 · $ 명령어 · ⌘O 노트 열기")
-    : "앱, 파일, 명령, 계산, AI에게 묻기";
+    : hint || "앱, 파일, 명령, 계산, AI에게 묻기";
   const header = home ? "Baro로 할 수 있는 일"
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`
+    : mode === "apps" ? (q.trim() ? `앱 ${appRows.length}개` : `설치된 앱 ${appRows.length}개`)
     : mode === "files" ? (found.loading ? "찾는 중…" : q.trim() ? `파일 ${found.items.length}개` : "파일 이름을 입력하세요 · Enter로 Finder에서 보기")
     : mode === "clip" ? (q.trim() ? `찾은 기록 ${items.filter(i => i.id.startsWith("clip-") && !["clip-toggle", "clip-clear"].includes(i.id)).length}개` : clips.enabled ? null : "기록을 멈춘 상태예요")
     : mode === "memo" ? (memo.shot ? `스크린샷 붙임 · 저장 이름: ${now().date}-${shotName(q.replace(/^\s*[!$]/, ""))}` : memo.saved ? `✓ ${memo.saved}` : memo.finding ? "공부 중인 단계 찾는 중…" : memo.stage ? `지금 단계: ${memo.stage.doc.name}` : "공부 중인 커리큘럼 단계가 없어 Daily에 적어요")
@@ -655,6 +671,7 @@ export default function App() {
     : mode === "note" && conc ? conc.error ?? (!conc.loading && !items.length ? (q ? "일치하는 개념이 없어요." : "이 단계에는 개념 목록이 없어요.") : null)
     : mode === "note" ? notes.error ?? (!notes.loading && !items.length ? (q ? "일치하는 노트가 없어요." : "폴더에 노트(.md)가 없어요.") : null)
     : mode === "hotkeys" ? hk.error
+    : mode === "apps" ? (q.trim() && !appRows.length ? "일치하는 앱이 없어요." : null)
     : mode === "files" ? (q.trim() && !found.loading && !found.items.length ? "일치하는 파일이 없어요." : null)
     : mode === "memo" ? memo.error
     : mode === "clip" ? (!clips.list.length ? "아직 기록이 없어요. 글을 복사하면 여기에 쌓여요 (비밀번호·키처럼 보이는 글은 빼요)." : q.trim() && !items.length ? "일치하는 기록이 없어요." : null)

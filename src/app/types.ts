@@ -13,7 +13,7 @@ export type Hk = { keys: Record<string, string>; recording: string | null; error
 // 비밀번호 모음: 수정(doc 있음) 또는 새 노트 추가(doc 없음)
 export type PwDraft = { doc: Doc | null; name: string; title: string; password: string; error: string | null; saving: boolean };
 // 화면 종류: null(기본 검색) | 파일 찾기 | 확장 스토어 | 노트 검색 | 예시 고르기 | 단축키 설정 | AI 질문 | 노트 검색 관리 | 노트 검색 추가·수정
-export type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit" | "files" | "memo" | "clip";
+export type Mode = null | "store" | "note" | "examples" | "hotkeys" | "ask" | "noteManage" | "noteEdit" | "pwEdit" | "files" | "memo" | "clip" | "apps";
 // 클립보드 기록 (Rust clip.rs): at = 복사한 시각(ms), app = 그때 앞에 있던 앱
 export type Clip = { text: string; at: number; app: string };
 // 빠른 메모: 기록할 커리큘럼 단계(없으면 Daily만), 어디서 왔는지(Esc로 돌아갈 곳), 결과 문구
