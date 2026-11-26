@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod ai;
 mod clip;
+mod cmd_ai;
+mod cmd_notes;
 mod config;
 mod embed;
 mod expand;
@@ -302,95 +304,6 @@ async fn window_layout(kind: String, app: AppHandle, win: WebviewWindow) -> Resu
     system::layout(pid, &kind, area)
 }
 
-#[tauri::command]
-async fn ask_ai(id: u32, prompt: String, app: AppHandle) -> Result<(), String> {
-    let c = config::load(&config_file(&app))?;
-    if c.ai_provider == "claude" && c.anthropic_api_key.trim().is_empty() {
-        return Err("설정 파일에 anthropic_api_key를 넣거나 ai_provider를 \"ollama\"로 바꿔 주세요.".into());
-    }
-    tauri::async_runtime::spawn(ai::ask(app, c, id, prompt));
-    Ok(())
-}
-
-// AI 답변을 Obsidian 노트로 저장. 저장 폴더를 보는 노트 검색이 없으면 "AI 답변" 노트 검색을 만들어 다시 찾을 수 있게 함
-// 내 노트에게 묻기: 관련 노트를 찾아 발췌와 함께 AI에 질문. 찾은 노트(출처)를 바로 돌려주고 답변은 스트리밍
-#[tauri::command]
-async fn ask_notes(id: u32, question: String, app: AppHandle) -> Result<Vec<rag::Source>, String> {
-    let c = config::load(&config_file(&app))?;
-    if c.ai_provider == "claude" && c.anthropic_api_key.trim().is_empty() {
-        return Err("설정 파일에 anthropic_api_key를 넣거나 ai_provider를 \"ollama\"로 바꿔 주세요.".into());
-    }
-    let vault = std::path::PathBuf::from(&c.vault_dir);
-    if !vault.is_dir() { return Err(format!("Vault를 읽을 수 없어요. 외장 디스크 연결을 확인하세요.\n{}", c.vault_dir)); }
-    // 비밀번호 모음 폴더는 통째로 제외
-    let skip: Vec<String> = c.note_searches.iter().filter(|n| n.kind == "passwords").map(|n| n.dir.clone()).collect();
-    let skip = rag::skip_list(&skip);
-    let ix = tauri::async_runtime::spawn_blocking(move || { let ix = rag::index(&vault, &skip); vault::save(); ix }).await.map_err(|e| e.to_string())?;
-    // 뜻 검색: "노트 뜻 색인 만들기"를 한 번 해 둔 경우에만. 바뀐 단락이 조금(64개 이하)이면 지금 계산
-    let url = c.ollama_url.trim_end_matches('/').to_string();
-    let mut qvec = None;
-    if embed::exists() && embed::count() > 0 {
-        let items = rag::embed_items(&ix);
-        let missing = items.iter().filter(|(k, _)| !embed::has(*k)).count();
-        if missing > 0 && missing <= 64 && !embed::BUSY.load(std::sync::atomic::Ordering::Relaxed)
-            && embed::fill(&url, &items, 16, |_, _| {}).await.is_ok() {
-            embed::save(Some(&rag::embed_keys(&ix)));
-        }
-        qvec = embed::embed(&url, std::slice::from_ref(&question)).await.ok().and_then(|mut v| v.pop());
-    }
-    let hits = rag::rank(&ix, &question, qvec.as_deref(), 5);
-    if hits.is_empty() { return Err("질문과 관련된 노트를 찾지 못했어요. 노트에 나올 만한 단어로 물어보세요.".into()); }
-    let sources = hits.iter().map(|h| rag::Source { title: h.title.clone(), file: h.file.clone() }).collect();
-    tauri::async_runtime::spawn(ai::ask(app, c, id, rag::prompt(&question, &hits)));
-    Ok(sources)
-}
-
-// 노트 뜻 색인 만들기 (bge-m3): 없는 단락만 계산. 진행은 embed-progress, 끝나면 embed-done 이벤트. 돌려주는 값: 계산할 단락 수
-#[tauri::command]
-async fn notes_embed_build(app: AppHandle) -> Result<usize, String> {
-    use std::sync::atomic::Ordering;
-    let c = config::load(&config_file(&app))?;
-    let vault = std::path::PathBuf::from(&c.vault_dir);
-    if !vault.is_dir() { return Err(format!("Vault를 읽을 수 없어요. 외장 디스크 연결을 확인하세요.\n{}", c.vault_dir)); }
-    if embed::BUSY.swap(true, Ordering::SeqCst) { return Err("이미 만들고 있어요.".into()); }
-    let skip = rag::skip_list(&c.note_searches.iter().filter(|n| n.kind == "passwords").map(|n| n.dir.clone()).collect::<Vec<_>>());
-    let ix = match tauri::async_runtime::spawn_blocking(move || rag::index(&vault, &skip)).await {
-        Ok(ix) => ix,
-        Err(e) => { embed::BUSY.store(false, Ordering::SeqCst); return Err(e.to_string()); }
-    };
-    let items = rag::embed_items(&ix);
-    let todo = items.iter().filter(|(k, _)| !embed::has(*k)).count();
-    let url = c.ollama_url.trim_end_matches('/').to_string();
-    tauri::async_runtime::spawn(async move {
-        let a = app.clone();
-        let r = embed::fill(&url, &items, 16, |done, total| {
-            let _ = a.emit("embed-progress", serde_json::json!({ "done": done, "total": total }));
-            if done % 320 == 0 { embed::save(None); } // 중간 저장 (도중에 꺼져도 이어서)
-        }).await;
-        embed::save(Some(&rag::embed_keys(&ix)));
-        embed::BUSY.store(false, Ordering::SeqCst);
-        let _ = app.emit("embed-done", serde_json::json!({ "total": todo, "count": embed::count(), "error": r.err() }));
-    });
-    Ok(todo)
-}
-
-#[tauri::command]
-fn save_ai(date: String, question: String, answer: String, app: AppHandle) -> Result<String, String> {
-    if !date.chars().all(|c| c.is_ascii_digit() || c == '-') { return Err("잘못된 날짜".into()); }
-    let path = config_file(&app);
-    let mut c = config::load(&path)?;
-    let model = if c.ai_provider == "claude" { c.ai_model.clone() } else { c.ollama_model.clone() };
-    let saved = wiki::save_ai(&c.ai_save_dir, &date, &question, &answer, &model)?;
-    let dir = c.ai_save_dir.trim_end_matches('/').to_string();
-    if !c.note_searches.iter().any(|n| n.dir.trim_end_matches('/') == dir) {
-        let id = if c.note_searches.iter().any(|n| n.id == "ai") { format!("ai{}", c.note_searches.len()) } else { "ai".into() };
-        c.note_searches.push(config::NoteSearch { id, name: "AI 답변".into(), dir, kind: "notes".into() });
-        c.hotkeys = config::hotkeys(&c);
-        config::save(&path, &c)?;
-    }
-    Ok(saved)
-}
-
 // 같은 기능의 단축키를 다시 누르면 닫고, 다른 기능이면 그 화면으로 전환
 // 고정 중에 다른 앱을 쓰다가 단축키를 누르면 닫지 않고 Baro로 포커스만 옮김
 fn toggle(w: &WebviewWindow, action: &str) {
@@ -475,197 +388,6 @@ fn set_hotkey(action: String, accel: String, app: AppHandle) -> Result<std::coll
         return Err(format!("단축키를 등록하지 못했어요. 다른 앱이 쓰고 있을 수 있어요. ({e})"));
     }
     Ok(keys)
-}
-
-// 노트 검색 하나의 노트 읽기
-#[tauri::command]
-async fn notes_load(id: String, app: AppHandle) -> Result<wiki::Notes, String> {
-    let c = config::load(&config_file(&app))?;
-    // "__vault": 전체 노트 그래프용. Vault 전체를 일반 노트 방식으로 읽음
-    let s = if id == "__vault" { config::NoteSearch { id, name: String::new(), dir: c.vault_dir.clone(), kind: "notes".into() } }
-        else { c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")? };
-    tauri::async_runtime::spawn_blocking(move || { let r = wiki::load(&s.dir, &s.kind, &c.vault_dir); vault::save(); r }).await.map_err(|e| e.to_string())?
-}
-
-fn note_dir(app: &AppHandle, id: &str) -> Result<String, String> {
-    let c = config::load(&config_file(app))?;
-    c.note_searches.into_iter().find(|n| n.id == id).map(|n| n.dir).ok_or("노트 검색을 찾지 못했어요.".into())
-}
-
-// 빠른 메모 기록·사진을 쓸 수 있는 폴더: 노트 검색 폴더. 커리큘럼은 허브가 가리키는 단계 노트가
-// 다른 폴더(예: Network-Security/Hacking-Curriculum)에 있을 수 있어 Vault 전체
-fn record_dir(app: &AppHandle, id: &str) -> Result<String, String> {
-    let c = config::load(&config_file(app))?;
-    let n = c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")?;
-    Ok(if n.kind == "curriculum" && !c.vault_dir.is_empty() { c.vault_dir } else { n.dir })
-}
-
-// 커리큘럼 허브: "### 단계"의 상태 바꾸기 (학습 전·학습 중·복습 필요·완료)
-#[tauri::command]
-fn note_stage_status(id: String, file: String, heading: String, value: String, app: AppHandle) -> Result<(), String> {
-    wiki::set_stage_status(&note_dir(&app, &id)?, &file, &heading, &value)
-}
-
-// 커리큘럼: 이름으로 노트 읽기 (단계의 개념 노트들). Vault 어디에 있든, 커리큘럼 폴더 안 노트 먼저
-#[tauri::command]
-async fn notes_named(id: String, names: Vec<String>, app: AppHandle) -> Result<Vec<wiki::Note>, String> {
-    let c = config::load(&config_file(&app))?;
-    let s = c.note_searches.into_iter().find(|n| n.id == id).ok_or("노트 검색을 찾지 못했어요.")?;
-    if s.kind != "curriculum" { return Err("커리큘럼에서만 쓸 수 있어요.".into()); }
-    let vault = c.vault_dir;
-    tauri::async_runtime::spawn_blocking(move || { let r = wiki::named(&s.dir, &vault, &names); vault::save(); r }).await.map_err(|e| e.to_string())
-}
-
-// 커리큘럼 허브: 개념 항목(index번째 체크박스 줄)의 상태 바꾸기
-#[tauri::command]
-fn note_task_state(id: String, file: String, index: usize, text: String, value: String, app: AppHandle) -> Result<(), String> {
-    wiki::set_task_state(&note_dir(&app, &id)?, &file, index, &text, &value)
-}
-
-// 노트 머리말 값 바꾸기 (비밀번호 모음의 비밀번호 수정 등). 해당 노트 검색 폴더 안의 파일만
-#[tauri::command]
-fn note_set_field(id: String, file: String, key: String, value: String, app: AppHandle) -> Result<(), String> {
-    // 커리큘럼은 Vault 어디든 있는 개념 노트에도 (last_studied)
-    wiki::set_field(&record_dir(&app, &id)?, &file, &key, &value)
-}
-
-// 커리큘럼: 노트의 index번째 체크박스 체크/해제
-#[tauri::command]
-fn note_toggle_task(id: String, file: String, index: usize, text: String, done: bool, app: AppHandle) -> Result<(), String> {
-    wiki::toggle_task(&record_dir(&app, &id)?, &file, index, &text, done)
-}
-
-// 커리큘럼 개념: 완료 기준(index번째 체크박스)에 증거를 달고 체크. field가 있으면 머리말 evidence에도
-#[tauri::command]
-fn note_add_evidence(id: String, file: String, index: usize, text: String, date: String, body: String, field: Option<String>, app: AppHandle) -> Result<(), String> {
-    wiki::add_evidence(&record_dir(&app, &id)?, &file, index, &text, &date, &body, field.as_deref())
-}
-
-// 커리큘럼 개념: 완료 기준 아래 n번째 증거 고치기 (체크·상태는 그대로)
-#[tauri::command]
-fn note_edit_evidence(id: String, file: String, index: usize, text: String, n: usize, first: String, body: String, field: Option<String>, app: AppHandle) -> Result<(), String> {
-    wiki::edit_evidence(&record_dir(&app, &id)?, &file, index, &text, n, &first, &body, field.as_deref())
-}
-
-// 빠른 메모: 오늘 Daily 노트에 한 줄 추가
-#[tauri::command]
-fn memo_daily(date: String, time: String, text: String, app: AppHandle) -> Result<String, String> {
-    let c = config::load(&config_file(&app))?;
-    wiki::append_daily(&c.vault_dir, &date, &time, &text)
-}
-
-// 빠른 메모 기록 지우기·되돌리기. section이 "daily"면 오늘 Daily(date), 아니면 커리큘럼 단계 노트(id·file)의 그 칸
-#[derive(serde::Serialize)]
-struct Removed { line: usize, text: String }
-
-#[tauri::command]
-fn memo_remove(id: String, file: String, date: String, section: String, index: usize, first: String, app: AppHandle) -> Result<Removed, String> {
-    let (line, text) = if section == "daily" {
-        wiki::remove_daily(&config::load(&config_file(&app))?.vault_dir, &date, index, &first)?
-    } else { wiki::remove_record(&record_dir(&app, &id)?, &file, &section, index, &first)? };
-    Ok(Removed { line, text })
-}
-
-#[tauri::command]
-fn memo_restore(id: String, file: String, date: String, section: String, line: usize, text: String, app: AppHandle) -> Result<(), String> {
-    if section == "daily" { wiki::restore_daily(&config::load(&config_file(&app))?.vault_dir, &date, line, &text) }
-    else { wiki::restore_record(&record_dir(&app, &id)?, &file, line, &text) }
-}
-
-// 빠른 메모 기록 고치기: 그 항목을 지운 자리에 고친 내용을 넣음
-#[tauri::command]
-fn memo_replace(id: String, file: String, date: String, section: String, index: usize, first: String, text: String, app: AppHandle) -> Result<(), String> {
-    if text.trim().is_empty() { return Err("고친 내용이 비어 있어요.".into()); }
-    if section == "daily" {
-        let vault = config::load(&config_file(&app))?.vault_dir;
-        let (line, _) = wiki::remove_daily(&vault, &date, index, &first)?;
-        wiki::restore_daily(&vault, &date, line, &text)
-    } else {
-        let dir = record_dir(&app, &id)?;
-        let (line, _) = wiki::remove_record(&dir, &file, &section, index, &first)?;
-        wiki::restore_record(&dir, &file, line, &text)
-    }
-}
-
-// 빠른 메모 스크린샷: 방금 찍은 것 (클립보드 이미지 또는 스크린샷 파일, 30분 이내)
-#[tauri::command]
-async fn shot_latest(app: AppHandle) -> Result<shot::Shot, String> {
-    // 처음 데스크탑을 읽을 때 macOS 폴더 접근 확인 창이 뜨면 Baro가 초점을 잃음 → 그동안은 숨기지 않음
-    let st = app.state::<AppState>();
-    *st.dialog_open.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
-    let r = tauri::async_runtime::spawn_blocking(shot::latest).await.map_err(|e| e.to_string());
-    *st.dialog_open.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = false;
-    r?
-}
-
-// 메모할 노트의 폴더. id가 비면 오늘 Daily(03_Daily)
-fn memo_note_dir(app: &AppHandle, vault: &Path, id: &str, file: &str) -> Result<PathBuf, String> {
-    if id.is_empty() { return Ok(vault.join("03_Daily")); }
-    Ok(wiki::inside(&record_dir(app, id)?, file)?.parent().ok_or("노트 폴더를 찾지 못했어요.")?.to_path_buf())
-}
-
-// 메모 기록에 붙은 사진(![[파일]])을 미리보기용 data URL로
-#[tauri::command]
-async fn shot_read(id: String, file: String, name: String, app: AppHandle) -> Result<String, String> {
-    let vault = PathBuf::from(config::load(&config_file(&app))?.vault_dir);
-    let dir = memo_note_dir(&app, &vault, &id, &file)?.join("attachments");
-    tauri::async_runtime::spawn_blocking(move || shot::read(&dir, &name)).await.map_err(|e| e.to_string())?
-}
-
-// 스크린샷을 메모할 노트 옆 attachments/에 "날짜-이름"으로 저장하고, 그 폴더의 첨부 목록 노트에 링크 추가.
-// id가 비면 오늘 Daily(03_Daily). 돌려주는 값: 파일 이름, 첨부 목록 노트 이름(추가 실패면 빈 글자)
-#[tauri::command]
-async fn shot_save(source: String, path: Option<String>, name: String, date: String, id: String, file: String, app: AppHandle) -> Result<(String, String), String> {
-    let vault = PathBuf::from(config::load(&config_file(&app))?.vault_dir);
-    let note_dir = memo_note_dir(&app, &vault, &id, &file)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let f = shot::save(&source, path.as_deref(), &name, &date, &note_dir.join("attachments"))?;
-        let list = shot::add_to_list(&vault, &note_dir, &note_dir.join("attachments").join(&f))
-            .unwrap_or_else(|e| { log::write(&format!("첨부 목록 추가 실패: {e}")); String::new() });
-        Ok((f, list))
-    }).await.map_err(|e| e.to_string())?
-}
-
-// 빠른 메모: 오늘 Daily 노트 경로 (Obsidian에서 열기용). 아직 없으면 Err
-#[tauri::command]
-fn memo_daily_path(date: String, app: AppHandle) -> Result<String, String> {
-    if date.len() != 10 || !date.chars().all(|c| c.is_ascii_digit() || c == '-') { return Err("날짜 형식이 잘못됐어요.".into()); }
-    let f = PathBuf::from(config::load(&config_file(&app))?.vault_dir).join("03_Daily").join(format!("{date}.md"));
-    if !f.is_file() { return Err("오늘 Daily 노트가 아직 없어요. 메모를 하나 저장하면 만들어져요.".into()); }
-    Ok(f.to_string_lossy().into_owned())
-}
-
-// 빠른 메모: 오늘 Daily 노트 읽기 (이미 적은 메모 보기)
-#[tauri::command]
-fn memo_daily_read(date: String, app: AppHandle) -> String {
-    config::load(&config_file(&app)).map(|c| wiki::read_daily(&c.vault_dir, &date)).unwrap_or_default()
-}
-
-// 빠른 메모: 커리큘럼 단계 노트의 "내 기록" 칸에 추가
-#[tauri::command]
-fn note_add_record(id: String, file: String, section: String, block: String, app: AppHandle) -> Result<(), String> {
-    wiki::add_record(&record_dir(&app, &id)?, &file, &section, &block)
-}
-
-// 클립보드 글자 (명령어 기록용)
-#[tauri::command]
-fn clipboard_text() -> Result<String, String> {
-    let out = std::process::Command::new("pbpaste").output().map_err(|e| e.to_string())?;
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-// 노트 검색 폴더에 새 노트 만들기
-#[tauri::command]
-fn note_create(id: String, name: String, content: String, app: AppHandle) -> Result<String, String> {
-    wiki::create(&note_dir(&app, &id)?, &name, &content)
-}
-
-// 노트 검색 추가·수정. id가 비어 있으면 새로 만듦. 저장한 id를 돌려줌
-// 아직 없는 [[링크]]로 개념 노트 만들기 (있으면 그 노트). 돌려주는 값: (경로, 새로 만들었는지)
-#[tauri::command]
-fn concept_create(src: String, name: String, date: String, app: AppHandle) -> Result<(String, bool), String> {
-    let c = config::load(&config_file(&app))?;
-    wiki::create_concept(&c.vault_dir, &src, &name, &date)
 }
 
 #[tauri::command]
@@ -844,11 +566,11 @@ fn main() {
             if *app.state::<AppState>().suspended.lock().unwrap_or_else(std::sync::PoisonError::into_inner) { register_hotkeys(app); }
         })
         .invoke_handler(tauri::generate_handler![log_error, search, icon, launch, open_path, reveal, files_wide, open_url, hide,
-            files, get_config, open_config, system_cmd, paste, window_layout, ask_ai, ask_notes, notes_embed_build, save_ai,
+            files, get_config, open_config, system_cmd, paste, window_layout, cmd_ai::ask_ai, cmd_ai::ask_notes, cmd_ai::notes_embed_build, cmd_ai::save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
-            notes_load, note_set_field, note_toggle_task, note_add_evidence, note_edit_evidence, note_stage_status, note_task_state, notes_named, note_add_record, memo_daily, memo_daily_read, memo_daily_path, shot_latest, shot_save, shot_read, memo_remove, memo_restore, memo_replace, clipboard_text, note_create, save_note_search, delete_note_search, pick_folder,
-            close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, concept_create, snippet_expand_set, snippet_expand_state])
+            cmd_notes::notes_load, cmd_notes::note_set_field, cmd_notes::note_toggle_task, cmd_notes::note_add_evidence, cmd_notes::note_edit_evidence, cmd_notes::note_stage_status, cmd_notes::note_task_state, cmd_notes::notes_named, cmd_notes::note_add_record, cmd_notes::memo_daily, cmd_notes::memo_daily_read, cmd_notes::memo_daily_path, cmd_notes::shot_latest, cmd_notes::shot_save, cmd_notes::shot_read, cmd_notes::memo_remove, cmd_notes::memo_restore, cmd_notes::memo_replace, cmd_notes::clipboard_text, cmd_notes::note_create, save_note_search, delete_note_search, pick_folder,
+            close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, cmd_notes::concept_create, snippet_expand_set, snippet_expand_state])
         .build(tauri::generate_context!())
         .expect("Baro 실행 실패")
         .run(|app, e| {
