@@ -1,11 +1,12 @@
 // 화면 조각: App이 상태를 가지고, 여기서는 받은 값으로 그리기만 함 (동작은 App.tsx에 있던 그대로)
-import { useEffect, useState, type Dispatch, type MouseEvent, type ReactNode, type Ref, type SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref, type SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { iconFor, Item, Action, View } from "../commands";
 import { Doc, NoteKind, KIND_LABELS } from "../notes";
 import { ICONS } from "../icons";
 import { fmtKey } from "./keys";
-import type { Ai, Draft, PwDraft, Clip, Shot } from "./types";
+import type { Ai, Draft, PwDraft, Clip, Shot, DocEd } from "./types";
+import { serializeDoc, tagsOf, withTags, type DocFields, type Prop } from "./docfields";
 import { clipDay, clipTime } from "./memo";
 
 export function Icon({ it }: { it: Item }) {
@@ -83,6 +84,61 @@ export function AiView({ ai, onOpen }: { ai: Ai; onOpen: (file: string) => void 
 }
 
 // 비밀번호 수정·새 항목 추가
+// Baro 안 노트 편집기: 제목(= 파일 이름)·속성(머리말)·내용 칸. 칸 값은 여기서만 들고 있다가 바뀔 때마다 onChange로 알림
+export function DocEditor({ ed, onChange }: { ed: DocEd; onChange: (f: DocFields) => void }) {
+  const [f, setF] = useState<DocFields>(ed.init);
+  const [focusProp, setFocusProp] = useState<number | null>(null); // 방금 추가한 속성 칸에 커서
+  const [tagIn, setTagIn] = useState(""); // 태그 입력칸 (Enter·쉼표로 추가)
+  const tags = tagsOf(f.props.find(p => p.key.trim() === "tags")?.value ?? "");
+  const addTags = (text: string) => {
+    const more = text.split(/[,\s]+/).map(t => t.trim().replace(/^#/, "")).filter(t => t && !tags.includes(t));
+    if (more.length) set(withTags(f, [...tags, ...more]));
+    setTagIn("");
+  };
+  const set = (next: DocFields) => { setF(next); onChange(next); };
+  const setProp = (i: number, p: Partial<Prop>) => set({ ...f, props: f.props.map((x, j) => j === i ? { ...x, ...p } : x) });
+  const addProp = () => { set({ ...f, props: [...f.props, { key: "", value: "" }] }); setFocusProp(f.props.length); };
+  const dirty = ed.isNew || serializeDoc(f) !== ed.start || f.title.trim() !== ed.doc.file.split("/").pop()?.replace(/\.md$/, "");
+  const onEnter = (e: KeyboardEvent<HTMLElement>, next: () => void) => { if (e.key === "Enter" && !e.metaKey && !e.nativeEvent.isComposing) { e.preventDefault(); next(); } };
+  return (
+    <div className="doc-edit">
+      <div className="doc-edit-bar">
+        <span className="doc-edit-name">{ed.isNew ? "새 글" : ed.search.name}{dirty ? " ●" : ""}</span>
+        <span className={ed.err ? "doc-edit-msg err" : "doc-edit-msg"}>{ed.err ?? (ed.ask ? "저장 안 한 변경이 있어요 · Esc 한 번 더 누르면 버리고 닫아요" : ed.msg ?? "⌘S 저장 · Esc 닫기 · ⌘O Obsidian에서 열기")}</span>
+      </div>
+      <input className="doc-edit-title" value={f.title} autoFocus={ed.isNew} placeholder="제목 (파일 이름)" spellCheck={false}
+        onChange={e => set({ ...f, title: e.target.value })} />
+      <div className="doc-tags">
+        <span className="doc-tags-label">태그</span>
+        {tags.map(t => <span className="doc-tag" key={t}>#{t}<button type="button" tabIndex={-1} title="태그 빼기" onClick={() => set(withTags(f, tags.filter(x => x !== t)))}>×</button></span>)}
+        <input className="doc-tag-in" value={tagIn} placeholder={tags.length ? "" : "태그 입력 후 Enter"} spellCheck={false}
+          onChange={e => e.target.value.endsWith(",") ? addTags(e.target.value) : setTagIn(e.target.value)}
+          onBlur={() => tagIn.trim() && addTags(tagIn)}
+          onKeyDown={e => {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); addTags(tagIn); }
+            else if (e.key === "Backspace" && !tagIn && tags.length) set(withTags(f, tags.slice(0, -1)));
+          }} />
+      </div>
+      <div className="doc-edit-props">
+        {f.props.map((p, i) => p.key.trim() === "tags" ? null : (
+          <div className="doc-prop" key={i}>
+            <input className="doc-prop-key" value={p.key} placeholder="속성 이름" spellCheck={false} autoFocus={focusProp === i}
+              onChange={e => setProp(i, { key: e.target.value.replace(/:/g, "") })}
+              onKeyDown={e => onEnter(e, () => (e.currentTarget.nextElementSibling as HTMLElement | null)?.focus())} />
+            {p.value.includes("\n")
+              ? <textarea className="doc-prop-val" rows={Math.min(5, p.value.split("\n").length)} value={p.value} spellCheck={false} onChange={e => setProp(i, { value: e.target.value })} />
+              : <input className="doc-prop-val" value={p.value} placeholder="값" spellCheck={false} onChange={e => setProp(i, { value: e.target.value })}
+                  onKeyDown={e => onEnter(e, addProp)} />}
+            <button type="button" className="doc-prop-del" title="속성 빼기" tabIndex={-1} onClick={() => set({ ...f, props: f.props.filter((_, j) => j !== i) })}>×</button>
+          </div>
+        ))}
+        <button type="button" className="doc-prop-add" onClick={addProp}>+ 속성 추가</button>
+      </div>
+      <textarea className="doc-edit-text" value={f.body} autoFocus={!ed.isNew} placeholder="내용" spellCheck={false} onChange={e => set({ ...f, body: e.target.value })} />
+    </div>
+  );
+}
+
 export function PwForm({ pw, setPw, folder, onSave, onCancel }: {
   pw: PwDraft; setPw: (p: PwDraft) => void; folder?: string; onSave: () => void; onCancel: () => void;
 }) {

@@ -10,13 +10,14 @@ import {
 import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, studyCard, Doc, NoteSearch, KIND_LABELS } from "./notes";
 import { NoteGraph, linkInfo } from "./graph";
 import { PERMS, hotkeyLabels, fmtKey, accelOf } from "./app/keys";
-import type { Source, Ai, Store, Notes, Draft, Hk, PwDraft, Mode, Clip } from "./app/types";
+import type { Source, Ai, Store, Notes, Draft, Hk, PwDraft, Mode, Clip, DocEd } from "./app/types";
 import { STATUS, weekLabel, docCache, docsSig, lastDoc } from "./app/status";
 import { MASK, nextName, newPwNote, today, baseOf } from "./app/passwords";
 import { useMemoScreen } from "./app/useMemoScreen";
 import { useStudy, studyItem } from "./app/useStudy";
 import { clipDay, clipTime, now } from "./app/memo";
-import { ItemList, ResultView, AiView, PwForm, SearchForm, MissingLinks, LinksPanel, MemoSide, ClipPreview, ActionMenu, Footer } from "./app/views";
+import { parseDoc, serializeDoc, titleOf, type DocFields } from "./app/docfields";
+import { ItemList, ResultView, AiView, PwForm, SearchForm, MissingLinks, LinksPanel, MemoSide, ClipPreview, ActionMenu, Footer, DocEditor } from "./app/views";
 
 export default function App() {
   const [q, setQ] = useState("");
@@ -44,6 +45,7 @@ export default function App() {
   const restoreSel = useRef<number | null>(null);
   const [reveal, setReveal] = useState(false); // 비밀번호 모음: 비밀번호 보이기 (⌘R)
   const [pw, setPw] = useState<PwDraft | null>(null);
+  const [docEd, setDocEd] = useState<DocEd | null>(null); // Baro 안에서 노트 편집 중
   const [graph, setGraph] = useState(false); // 노트 검색을 그래프로 보기 (⌘G)
   const [pick, setPick] = useState<Doc | null>(null); // 그래프에서 클릭한 노트
   const [local, setLocal] = useState(0); // 로컬 그래프: 0 끔, 1·2 = 고른 노트에서 몇 단계까지 (⌘L)
@@ -225,11 +227,68 @@ export default function App() {
       : notes.search?.kind === "curriculum" ? [...nextUp(notes.docs), ...[...notes.docs].sort(byStage)]
       : byCategory(notes.docs)) : [],
     [mode, notes.docs, q, notes.search?.kind, conc]);
+  // Baro 안에서 노트 편집 (비밀번호 모음은 비밀번호 수정 화면을 씀)
+  // 편집칸 값은 편집기 안에서만 바뀌고(입력할 때 App 전체를 다시 그리지 않게), 저장·닫기 때 여기서 읽음
+  const docFields = useRef<DocFields | null>(null);
+  const docDirty = () => !!docEd && !!docFields.current && serializeDoc(docFields.current) !== docEd.start;
+  const startDocEdit = (ed: Omit<DocEd, "start" | "ask" | "msg" | "err">) => {
+    docFields.current = ed.init;
+    setDocEd({ ...ed, start: ed.isNew ? "" : serializeDoc(ed.init), ask: false, msg: null, err: null });
+    setView(null); setAi(null); setMode("docEdit");
+  };
+  const openDocEdit = (d: Doc) => {
+    const search = notes.search;
+    if (!search) return;
+    invoke<string>("note_read", { id: search.id, file: d.file })
+      .then(text => startDocEdit({ search, doc: d, base: text, init: parseDoc(text, titleOf(d.file)), q }))
+      .catch(failNote);
+  };
+  // 닫을 때: 폴더를 새로 읽고, 방금 고친(만든) 글을 목록에서 골라 둠
+  const pickFile = useRef<string | null>(null);
+  const closeDocEdit = () => {
+    const back = docEd?.isNew ? "" : docEd?.q ?? "";
+    pickFile.current = docEd?.doc.file || null;
+    setTimeout(() => { pickFile.current = null; }, 3000); // 목록에 안 나오면 (검색어에 안 맞는 등) 그냥 둠
+    if (docEd) docCache.delete(docEd.search.id);
+    setDocEd(null); docFields.current = null; setMode("note"); setQ(back); reloadDocs();
+    requestAnimationFrame(() => input.current?.focus());
+  };
+  const saveDocEdit = async () => {
+    const ed = docEd, f = docFields.current;
+    if (!ed || !f) return;
+    const name = f.title.trim(), content = serializeDoc(f);
+    if (!name) { setDocEd({ ...ed, err: "제목을 써 주세요. 제목이 파일 이름이 돼요.", msg: null }); return; }
+    if (!ed.isNew && content === ed.start && name === titleOf(ed.doc.file)) { setDocEd({ ...ed, msg: "바뀐 내용이 없어요", err: null, ask: false }); return; }
+    const done = (file: string, msg: string) => {
+      setDocEd(d => d && { ...d, isNew: false, doc: { ...d.doc, name, file }, base: content, start: content, ask: false, msg, err: null });
+      docCache.delete(ed.search.id); reloadDocs(); // 목록에도 바로 반영
+    };
+    const call = ed.isNew ? invoke<string>("note_create", { id: ed.search.id, name, content })
+      : invoke<string>("note_write", { id: ed.search.id, file: ed.doc.file, base: ed.base, content, name });
+    await call.then(file => done(file, `✓ ${ed.isNew ? "만들었어요" : file !== ed.doc.file ? "이름 바꿔 저장했어요" : "저장했어요"} · ${now().time}`))
+      .catch(e => setDocEd(d => d && { ...d, err: String(e), msg: null }));
+  };
+  // 글쓰기 노트 검색: 새 글. 입력한 검색어가 있으면 그걸 제목으로
+  const newWriteItem = (): Item => {
+    const title = q.trim();
+    return { id: "w-new", title: title ? `새 글 쓰기: ${title}` : "새 글 쓰기", subtitle: `${notes.search?.name ?? ""} 폴더에 만들어요 · 제목이 파일 이름`,
+      kind: "cmd", glyph: "plus", section: "쓰기", actions: [{ title: "쓰기", keep: true, run: async () => openNewDoc(title) }] };
+  };
+  const openNewDoc = (title: string) => {
+    const search = notes.search;
+    if (!search) return;
+    startDocEdit({ search, doc: { name: title || "새 글", file: "" } as Doc, isNew: true, base: "",
+      init: { title, props: [{ key: "created", value: now().date }], body: "" }, q });
+  };
+  const withEdit = (it: Item, d: Doc): Item => notes.search?.kind === "passwords" || notes.search?.kind === "write" ? it
+    : { ...it, actions: [...it.actions, { title: "Baro에서 편집", shortcut: "⌘E", keep: true, run: async () => openDocEdit(d) }] };
   const noteItem = (d: Doc): Item => {
     const kind = notes.search?.kind ?? "notes";
     const obsidian: Action = { title: "Obsidian에서 열기", shortcut: "⌘O",
       run: () => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` }) };
     const finder: Action = { title: "Finder에서 보기", shortcut: "⌘F", run: () => invoke("reveal", { path: d.file }) };
+    if (kind === "write") return { id: `n-${d.file}`, title: d.name, kind: "wiki", glyph: "doc", section: q.trim() ? undefined : "이 폴더의 글",
+      subtitle: d.summary, actions: [{ title: "Baro에서 고치기", keep: true, run: async () => openDocEdit(d) }, obsidian, finder] };
     if (kind === "passwords") {
       const p = d.meta.password ?? "", ssh = d.meta.ssh;
       return { id: `n-${d.file}`, title: d.name, kind: "wiki", glyph: "lock", section: q.trim() ? undefined : d.category,
@@ -307,7 +366,7 @@ export default function App() {
   const home = mode === null && !q.trim();
   const items: Item[] =
     mode === "examples" && exDoc ? exampleItems(exDoc.doc)
-    : mode === "note" ? [...noteList.map(noteItem), ...(notes.search?.kind === "passwords" && !notes.loading && !notes.error ? [{
+    : mode === "note" ? [...(notes.search?.kind === "write" && !conc ? [newWriteItem()] : []), ...noteList.map(d => withEdit(noteItem(d), d)), ...(notes.search?.kind === "passwords" && !notes.loading && !notes.error ? [{
         id: "pw-new", title: "새 항목 추가", subtitle: `${nextName(lastDoc(notes.docs))} · 비밀번호 입력`, kind: "cmd" as const, glyph: "plus",
         section: "추가", actions: [{ title: "추가", keep: true, run: async () => openPw(null) }] }] : [])]
     : mode === "pwEdit" ? []
@@ -322,9 +381,14 @@ export default function App() {
     : mode === "clip" ? clipItems()
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
   const graphOn = mode === "note" && graph;
+  useEffect(() => {
+    if (!pickFile.current || mode !== "note") return;
+    const i = items.findIndex(it => it.id === `n-${pickFile.current}`);
+    if (i >= 0) { setSel(i); pickFile.current = null; }
+  });
   const memoPickAt = mode === "memo" ? items.findIndex(i => i.id === "memo-pick") : -1; // 빠른 메모: 저장할 곳 칸 수 (그 뒤는 고르기·사진·클립보드)
   // 창 크기 종류: 그래프는 가장 크게, 미리보기가 있는 화면·AI 답변은 넓게. 종류마다 사용자가 맞춘 크기를 기억
-  const sizeKind = graphOn ? "graph" : ai || mode === "note" || mode === "memo" || mode === "clip" ? "wide" : "normal";
+  const sizeKind = graphOn ? "graph" : ai || mode === "note" || mode === "docEdit" || mode === "memo" || mode === "clip" ? "wide" : "normal";
   useEffect(() => { invoke("set_view", { kind: sizeKind }); }, [sizeKind]);
   const curClip = mode === "clip" ? clips.list.find(c => `clip-${c.at}` === items[sel]?.id) : undefined;
   // 커리큘럼 허브: 그래프에는 단계 대신 연결된 단계 노트를 보여 주고, 고르면 허브 단계로
@@ -380,7 +444,7 @@ export default function App() {
     else if (action === "files") openFiles();
     else if (action === "memo") openMemo();
     else if (action === "clipboard") openClip();
-    else if (mode !== null && mode !== "store" && mode !== "noteEdit") enter(null);
+    else if (mode !== null && mode !== "store" && mode !== "noteEdit" && mode !== "docEdit") enter(null); // 편집 중인 노트는 창을 다시 열어도 그대로
     input.current?.focus(); input.current?.select();
   };
   const shownRef = useRef(onShown);
@@ -496,6 +560,17 @@ export default function App() {
 
   // 입력 화면(노트 검색 추가·수정, 비밀번호 수정·추가, 단축키 입력 중): 다른 키 처리보다 먼저
   const keyForms = (e: KeyboardEvent): boolean => {
+    // 노트 편집: ⌘S 저장, Esc 닫기 (안 저장한 변경이 있으면 한 번 더), ⌘O Obsidian. 나머지 키는 편집칸으로
+    if (mode === "docEdit" && docEd) {
+      if (e.metaKey && e.code === "KeyS") { e.preventDefault(); saveDocEdit(); }
+      else if (e.metaKey && e.code === "KeyO") { e.preventDefault(); if (docEd.doc.file) openObsidian(docEd.doc.file); }
+      else if (e.key === "Escape") {
+        e.preventDefault();
+        if (docDirty() && !docEd.ask) setDocEd({ ...docEd, ask: true });
+        else closeDocEdit();
+      }
+      return true;
+    }
     // 노트 검색 추가·수정 화면: 입력칸은 그대로 두고 Esc(취소)·⌘↵(저장)·단축키 입력만 처리
     if (mode === "noteEdit" && draft) {
       if (draft.recording) {
@@ -695,11 +770,12 @@ export default function App() {
         onMouseDown={() => invoke("set_placed", { on: true })}><span data-tauri-drag-region /></div>
       {mode === "memo" ? <textarea ref={input} className="search memo-input" value={q} autoFocus spellCheck={false} placeholder={placeholder}
         rows={Math.min(6, q.split("\n").length)} onChange={e => setQ(e.target.value)} />
-        : mode !== "noteEdit" && mode !== "pwEdit" && <input ref={input} className="search" value={q} autoFocus spellCheck={false} placeholder={placeholder}
+        : mode !== "noteEdit" && mode !== "pwEdit" && mode !== "docEdit" && <input ref={input} className="search" value={q} autoFocus spellCheck={false} placeholder={placeholder}
         onChange={e => setQ(e.target.value)} />}
       {view ? <ResultView view={view} perm={perm} />
       : ai ? <AiView ai={ai} onOpen={openObsidian} />
       : mode === "pwEdit" && pw ? <PwForm pw={pw} setPw={setPw} folder={notes.search?.name} onSave={savePw} onCancel={() => { setPw(null); setMode("note"); }} />
+      : mode === "docEdit" && docEd ? <DocEditor key={docEd.isNew ? "new" : docEd.doc.file} ed={docEd} onChange={f => { docFields.current = f; if (docEd.ask || docEd.msg || docEd.err) setDocEd(d => d && { ...d, ask: false, msg: null, err: null }); }} />
       : mode === "noteEdit" && draft ? <SearchForm draft={draft} setDraft={setDraft} onSave={saveDraft} onCancel={() => { setDraft(null); openNoteManager(); }} onPickFolder={pickFolder} />
       : graphOn ? (
         // 노트 그래프: 왼쪽 그래프 + 오른쪽 미리보기. 검색어는 맞는 노트만 진하게

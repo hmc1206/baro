@@ -193,3 +193,30 @@ pub fn concept_create(src: String, name: String, date: String, app: AppHandle) -
     let c = config::load(&config_file(&app))?;
     wiki::create_concept(&c.vault_dir, &src, &name, &date)
 }
+
+// Baro 안에서 노트 편집: 원문 읽기
+#[tauri::command]
+pub fn note_read(id: String, file: String, app: AppHandle) -> Result<String, String> {
+    std::fs::read_to_string(wiki::inside(&record_dir(&app, &id)?, &file)?).map_err(|e| e.to_string())
+}
+
+// 편집한 원문 저장. base(열 때 읽은 원문)와 지금 파일이 다르면 Obsidian 등에서 바뀐 것이라 덮어쓰지 않음.
+// name(제목 = 파일 이름)이 바뀌었으면 같은 폴더에서 이름도 바꿈. 돌려주는 값: 저장한 파일 경로
+#[tauri::command]
+pub fn note_write(id: String, file: String, base: String, content: String, name: String, app: AppHandle) -> Result<String, String> {
+    let f = wiki::inside(&record_dir(&app, &id)?, &file)?;
+    let now = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
+    if now != base { return Err("연 뒤에 다른 곳(Obsidian 등)에서 이 노트가 바뀌었어요. 닫고 다시 열어 주세요. 고친 내용은 복사해 두세요.".into()); }
+    let name = name.trim().trim_end_matches(".md").trim();
+    let to = if name.is_empty() || f.file_stem().is_some_and(|s| s.to_string_lossy() == name) { f.clone() } else {
+        if name.starts_with('.') || name.contains(['/', '\\', ':']) { return Err("제목(파일 이름)에 / \\ : 는 쓸 수 없어요.".into()); }
+        let t = f.with_file_name(format!("{name}.md"));
+        if t.exists() { return Err(format!("같은 이름의 노트가 이미 있어요: {name}.md")); }
+        t
+    };
+    let tmp = f.with_extension("md.baro-tmp");
+    std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &to).map_err(|e| e.to_string())?;
+    if to != f { let _ = std::fs::remove_file(&f); }
+    Ok(to.to_string_lossy().into_owned())
+}

@@ -14,7 +14,7 @@ pub struct Snippet { pub keyword: String, pub name: String, pub text: String }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NoteSearch { pub id: String, pub name: String, pub dir: String, pub kind: String }
 
-pub const NOTE_KINDS: &[&str] = &["commands", "notes", "snippets", "passwords", "curriculum"];
+pub const NOTE_KINDS: &[&str] = &["commands", "notes", "snippets", "passwords", "curriculum", "write"];
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
