@@ -297,18 +297,27 @@ export async function fileItems(q: string, wide = false): Promise<Item[]> {
   q = q.trim();
   if (q.length < (wide ? 1 : 2) || !isMac) return [];
   const paths = await invoke<string[]>(wide ? "files_wide" : "files", { q }).catch(() => [] as string[]);
-  return paths.map(p0 => {
-    const p = p0.normalize("NFC");
-    const name = p.split("/").pop() ?? p;
-    const dir = p.slice(0, p.length - name.length - 1).replace(/^\/Users\/[^/]+/, "~");
-    const open: Action = { title: "열기", run: () => invoke("open_path", { path: p0 }) };
-    // 파일 찾기 화면 ⌘O: Obsidian에서 열기 (Vault 밖 파일이면 Obsidian이 알려 줌)
-    const obsidian: Action = { title: "Obsidian에서 열기", shortcut: "⌘O", run: () => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(p0)}` }) };
-    const finder: Action = { title: "Finder에서 보기", run: () => invoke("reveal", { path: p0 }) };
-    const path: Action = { title: "경로 복사", shortcut: wide ? "⌘C" : undefined, run: () => copy(p0) };
-    return { id: `f-${p}`, title: name, subtitle: dir, kind: "file" as const, path: p0,
-      actions: wide ? [finder, obsidian, open, path] : [open, finder, path] };
-  });
+  return paths.map(p0 => fileItem(p0, wide));
+}
+
+// 파일 찾기 화면을 검색어 없이 열 때: 최근 바뀐 파일 (사용자 폴더 · 외장 디스크)
+export async function recentFileItems(): Promise<Item[]> {
+  if (!isMac) return [];
+  const paths = await invoke<string[]>("files_recent").catch(() => [] as string[]);
+  return paths.map(p0 => fileItem(p0, true));
+}
+
+function fileItem(p0: string, wide: boolean): Item {
+  const p = p0.normalize("NFC");
+  const name = p.split("/").pop() ?? p;
+  const dir = p.slice(0, p.length - name.length - 1).replace(/^\/Users\/[^/]+/, "~");
+  const open: Action = { title: "열기", run: () => invoke("open_path", { path: p0 }) };
+  // 파일 찾기 화면 ⌘O: Obsidian에서 열기 (Vault 밖 파일이면 Obsidian이 알려 줌)
+  const obsidian: Action = { title: "Obsidian에서 열기", shortcut: "⌘O", run: () => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(p0)}` }) };
+  const finder: Action = { title: "Finder에서 보기", run: () => invoke("reveal", { path: p0 }) };
+  const path: Action = { title: "경로 복사", shortcut: wide ? "⌘C" : undefined, run: () => copy(p0) };
+  return { id: `f-${p}`, title: name, subtitle: dir, kind: "file" as const, path: p0,
+    actions: wide ? [finder, obsidian, open, path] : [open, finder, path] };
 }
 
 // 앱·파일 아이콘 (경로별 캐시)

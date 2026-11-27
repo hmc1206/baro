@@ -104,16 +104,49 @@ pub fn find_files_wide(q: &str, n: usize) -> Vec<String> {
     mdfind_name(q, &roots, n)
 }
 
+// 파일 찾기 화면을 검색어 없이 열 때: 최근 90일에 바뀐 파일을 최근 순으로 (폴더 제외).
+// 홈 전체는 느려서(수 초) 사용자 폴더와 외장 디스크만, 각 위치를 동시에 찾고 2분 동안 결과를 재사용
+pub fn recent_files(n: usize) -> Vec<String> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
+    if let Some((at, v)) = CACHE.lock().unwrap().as_ref() {
+        if at.elapsed() < Duration::from_secs(120) { return v.clone(); }
+    }
+    let mut roots: Vec<std::path::PathBuf> = dirs::home_dir().into_iter()
+        .flat_map(|h| ["Desktop", "Downloads", "Documents", "Pictures", "Movies", "Music"].map(|d| h.join(d)))
+        .filter(|p| p.is_dir()).collect();
+    if let Ok(rd) = std::fs::read_dir("/Volumes") {
+        roots.extend(rd.flatten().filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false)).map(|e| e.path()));
+    }
+    let q = "kMDItemFSContentChangeDate >= $time.today(-90) && kMDItemContentType != public.folder";
+    let handles: Vec<_> = roots.into_iter().map(|r| std::thread::spawn(move || {
+        Command::new("mdfind").arg("-onlyin").arg(&r).arg(q).stderr(Stdio::null()).output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(String::from).collect::<Vec<_>>()).unwrap_or_default()
+    })).collect();
+    let mut seen = std::collections::HashSet::new(); // mdfind가 같은 경로를 두 번 주기도 함
+    let mut out: Vec<(std::time::SystemTime, String)> = handles.into_iter().flat_map(|h| h.join().unwrap_or_default())
+        .filter(|l| seen.insert(l.clone()))
+        .filter(|l| !SKIP.iter().any(|s| l.contains(s)) && !l.rsplit('/').next().unwrap_or("").starts_with("._"))
+        .filter_map(|l| std::fs::metadata(&l).ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok()).map(|t| (t, l)))
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    let v: Vec<String> = out.into_iter().take(n).map(|(_, l)| l).collect();
+    *CACHE.lock().unwrap() = Some((Instant::now(), v.clone()));
+    v
+}
+
+const SKIP: [&str; 6] = ["/node_modules/", "/Library/", "/.", "/target/", ".app/", "/dist/"];
+
 fn mdfind_name(q: &str, roots: &[std::path::PathBuf], n: usize) -> Vec<String> {
     if roots.is_empty() { return vec![] }
     let mut cmd = Command::new("mdfind");
     for r in roots { cmd.arg("-onlyin").arg(r); }
     let Ok(mut child) = cmd.args(["-name", q])
         .stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else { return vec![] };
-    let skip = ["/node_modules/", "/Library/", "/.", "/target/", ".app/", "/dist/"];
     let mut out: Vec<String> = BufReader::new(child.stdout.take().unwrap()).lines()
         .map_while(Result::ok)
-        .filter(|l| !skip.iter().any(|s| l.contains(s)))
+        .filter(|l| !SKIP.iter().any(|s| l.contains(s)))
         .take(n.max(200))
         .collect();
     let _ = child.kill();

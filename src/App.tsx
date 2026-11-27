@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
 import {
-  query, fileItems, storeItems, homeItems, aiItem, notesAiItem, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
+  query, fileItems, recentFileItems, storeItems, homeItems, aiItem, notesAiItem, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry,
   appList,
 } from "./commands";
@@ -17,6 +17,7 @@ import { useMemoScreen } from "./app/useMemoScreen";
 import { useStudy, studyItem } from "./app/useStudy";
 import { clipDay, clipTime, now } from "./app/memo";
 import { parseDoc, serializeDoc, titleOf, type DocFields } from "./app/docfields";
+import { groupByKind } from "./app/filekinds";
 import { ItemList, ResultView, AiView, PwForm, SearchForm, MissingLinks, LinksPanel, MemoSide, ClipPreview, ActionMenu, Footer, DocEditor } from "./app/views";
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
   const [bottom, setBottom] = useState<Item[]>([]);
   const [files, setFiles] = useState<Item[]>([]);
   const [found, setFound] = useState<{ items: Item[]; loading: boolean }>({ items: [], loading: false }); // 파일 찾기 화면 결과
+  const [fileOpen, setFileOpen] = useState<string | null>(null); // 파일 찾기 화면에서 한 종류만 펼쳐 보는 중
   const [appRows, setAppRows] = useState<Item[]>([]); // 앱 실행 화면 결과
   const [hint, setHint] = useState(""); // 처음 화면 기능을 고르면 입력창에 흐리게 보이는 예시
   const [sel, setSel] = useState(0);
@@ -161,7 +163,7 @@ export default function App() {
           run: async () => { await invoke("clip_clear"); await loadClips(); } }] }] : []),
     ];
   };
-  const openFiles = () => { setFound({ items: [], loading: false }); enter("files"); };
+  const openFiles = () => { setFound({ items: [], loading: false }); setFileOpen(null); enter("files"); };
   // 비밀번호 수정·새 노트 저장 후 노트 다시 읽기
   const savePw = async () => {
     const search = notes.search;
@@ -375,7 +377,9 @@ export default function App() {
     : mode === "hotkeys" ? hotkeyItems()
     : mode === "store" ? storeItems(q, store.entries, () => setRev(r => r + 1), ui)
     : mode === "ask" ? (q.trim() ? [aiItem(q.trim(), ask, askNotes), ...[notesAiItem(q.trim(), askNotes)].filter((x): x is Item => !!x)] : [])
-    : mode === "files" ? found.items
+    : mode === "files" ? groupByKind(found.items, q.trim() ? 6 : 8, fileOpen, (kind, rest): Item => ({
+        id: `fk-${kind}`, title: `${kind} ${rest}개 더 보기`, subtitle: "Esc로 전체 종류로 돌아오기", kind: "cmd", glyph: "plus",
+        actions: [{ title: "더 보기", keep: true, run: async () => { setFileOpen(kind); setSel(0); } }] }))
     : mode === "apps" ? appRows
     : mode === "memo" ? memoItems()
     : mode === "clip" ? clipItems()
@@ -519,13 +523,13 @@ export default function App() {
     return () => { live = false; };
   }, [q, mode]);
 
-  // 파일 찾기 화면: 입력이 멈추면 홈 + 외장 디스크 검색
+  // 파일 찾기 화면: 입력이 없으면 최근 바뀐 파일, 입력이 멈추면 홈 + 외장 디스크 검색 (둘 다 종류별 구역으로 보여 줌)
   useEffect(() => {
     if (mode !== "files") return;
-    if (!q.trim()) { setFound({ items: [], loading: false }); return; }
     setFound(f => ({ ...f, loading: true }));
     let live = true;
-    const t = setTimeout(() => fileItems(q, true).then(items => { if (live) { setFound({ items, loading: false }); setSel(0); } }), 150);
+    const load = q.trim() ? () => fileItems(q, true) : recentFileItems;
+    const t = setTimeout(() => load().then(items => { if (live) { setFound({ items, loading: false }); setSel(0); } }), q.trim() ? 150 : 0);
     return () => { live = false; clearTimeout(t); };
   }, [q, mode]);
 
@@ -693,7 +697,7 @@ export default function App() {
     else if (e.key === "Enter") { e.preventDefault(); run(menu ? cur?.actions[asel] : cur?.actions[0]); }
     // Esc: 확인 취소 → 액션 패널 닫기 → 입력 지우기 → 예시 지우기 → 이전 화면 → 창 닫기
     else if (e.key === "Escape") {
-      if (pending) setPending(null); else if (menu) setMenu(false); else if (q) setQ(""); else if (hint) setHint("");
+      if (pending) setPending(null); else if (menu) setMenu(false); else if (mode === "files" && fileOpen) { setFileOpen(null); setSel(0); } else if (q) setQ(""); else if (hint) setHint("");
       else if (mode !== null) back(); else invoke("close_window");
     }
   };
@@ -740,7 +744,8 @@ export default function App() {
   const header = home ? "Baro로 할 수 있는 일"
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`
     : mode === "apps" ? (q.trim() ? `앱 ${appRows.length}개` : `설치된 앱 ${appRows.length}개`)
-    : mode === "files" ? (found.loading ? "찾는 중…" : q.trim() ? `파일 ${found.items.length}개` : "파일 이름을 입력하세요 · Enter로 Finder에서 보기")
+    : mode === "files" ? (found.loading ? (q.trim() ? "찾는 중…" : "최근 파일 불러오는 중…") : fileOpen ? `${fileOpen}만 보는 중 · Esc 전체 종류`
+      : q.trim() ? `파일 ${found.items.length}개 · 종류별` : `최근 90일 파일 ${found.items.length}개 · 종류별 · 이름을 입력하면 전체에서 찾기`)
     : mode === "clip" ? (q.trim() ? `찾은 기록 ${items.filter(i => i.id.startsWith("clip-") && !["clip-toggle", "clip-clear"].includes(i.id)).length}개` : clips.enabled ? null : "기록을 멈춘 상태예요")
     : mode === "memo" ? (memo.shot ? `스크린샷 붙임 · 저장 이름: ${now().date}-${shotName(q.replace(/^\s*[!$]/, ""))}` : picking ? (q.trim() ? "전체에서 이름 검색 · Enter로 정하기" : `${picking.dir ? picking.dir.split("/").join(" / ") : "Vault"} · Enter 열기·정하기 · ⌫ 상위 폴더`) : memo.saved ? `✓ ${memo.saved}` : memo.stage ? `${memo.stage.doc.name}에 기록하기` : "저장할 곳 · Tab으로 바꾸기")
     : mode === "note" && conc ? (conc.loading ? "개념 노트 불러오는 중…" : `${conc.stage.category} · ${conc.stage.name} · 개념 ${conc.docs.length}개 · Esc 단계 목록`)
@@ -751,7 +756,7 @@ export default function App() {
     : mode === "note" ? notes.error ?? (!notes.loading && !items.length ? (q ? "일치하는 노트가 없어요." : "폴더에 노트(.md)가 없어요.") : null)
     : mode === "hotkeys" ? hk.error
     : mode === "apps" ? (q.trim() && !appRows.length ? "일치하는 앱이 없어요." : null)
-    : mode === "files" ? (q.trim() && !found.loading && !found.items.length ? "일치하는 파일이 없어요." : null)
+    : mode === "files" ? (!found.loading && !found.items.length ? (q.trim() ? "일치하는 파일이 없어요." : "최근 90일에 바뀐 파일이 없어요.") : null)
     : mode === "memo" ? memo.error
     : mode === "clip" ? (!clips.list.length ? "아직 기록이 없어요. 글을 복사하면 여기에 쌓여요 (비밀번호·키처럼 보이는 글은 빼요)." : q.trim() && !items.length ? "일치하는 기록이 없어요." : null)
     : mode === null && q && !items.length ? "결과가 없습니다. 다른 이름으로 검색해 보세요." : null;
