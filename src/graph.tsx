@@ -259,6 +259,7 @@ export function NoteGraph({ docs, matches, selected, loading, cacheKey = "", loc
       const css = getComputedStyle(document.documentElement);
       const text = css.getPropertyValue("--text").trim() || "#222";
       const muted = css.getPropertyValue("--muted").trim() || "#888";
+      const accent = css.getPropertyValue("--accent-text").trim() || "#F5A524";
       const dark = scheme.matches;
       const { matches: m, selected: sel } = props.current;
       const selI = sel ? g.nodes.findIndex(n => n.key === sel.file) : -1;
@@ -273,9 +274,11 @@ export function NoteGraph({ docs, matches, selected, loading, cacheKey = "", loc
       ctx.lineWidth = 1 / s.zoom;
       for (const [i, j] of g.edges) {
         const on = focus >= 0 && (i === focus || j === focus);
-        ctx.strokeStyle = on ? (dark ? "rgba(140,170,255,.8)" : "rgba(47,107,255,.7)") : lit(i) && lit(j) ? (dark ? "rgba(255,255,255,.16)" : "rgba(27,34,48,.16)") : (dark ? "rgba(255,255,255,.04)" : "rgba(27,34,48,.04)");
+        ctx.globalAlpha = on ? .85 : 1;
+        ctx.strokeStyle = on ? accent : lit(i) && lit(j) ? (dark ? "rgba(255,255,255,.16)" : "rgba(27,34,48,.16)") : (dark ? "rgba(255,255,255,.04)" : "rgba(27,34,48,.04)");
         ctx.beginPath(); ctx.moveTo(g.nodes[i].x, g.nodes[i].y); ctx.lineTo(g.nodes[j].x, g.nodes[j].y); ctx.stroke();
       }
+      ctx.globalAlpha = 1;
       g.nodes.forEach((n, i) => {
         const on = lit(i);
         ctx.globalAlpha = on ? 1 : .15;
