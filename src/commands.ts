@@ -20,7 +20,7 @@ export type StoreEntry = { id: string; name: string; description: string; versio
 // 목록 밖의 화면: 텍스트 결과, 권한 안내
 export type View = { kind: "text"; title: string; text: string; error?: boolean } | { kind: "perm"; perm: string };
 // 화면(App)이 넘겨주는 동작들
-export type Ui = { ask: (q: string) => void; askNotes: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openClip: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void; openApps: () => void; setHint: (hint: string) => void };
+export type Ui = { ask: (q: string) => void; askNotes: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openClip: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void; openApps: () => void; setHint: (hint: string) => void; openFeature: (f: Feature) => void };
 
 const isMac = navigator.userAgent.includes("Mac");
 let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, note_searches: [], error: null };
@@ -77,6 +77,10 @@ function calc(q: string): Item | null {
     ] };
   } catch { return null; }
 }
+
+// 처음 화면에서 고르면 그 기능에 무엇이 있는지 목록으로 보여 주는 묶음
+export type Feature = "window" | "system" | "quicklinks" | "snippets" | "tools";
+export const FEATURE_TITLES: Record<Feature, string> = { window: "창 관리", system: "시스템 명령", quicklinks: "퀵링크", snippets: "스니펫", tools: "Baro 도구" };
 
 // 창 관리·시스템 명령 (macOS)
 type Cmd = { id: string; title: string; keys: string; glyph: string; confirm?: string; run: (ui: Ui) => Promise<unknown> };
@@ -146,8 +150,8 @@ function quicklinks(q: string): Item[] {
   });
 }
 
-function snippets(q: string): Item[] {
-  return config.snippets.filter(s => score(q, s.keyword, s.name) >= 2).map(s => {
+function snippets(q: string, all = false): Item[] {
+  return config.snippets.filter(s => all || score(q, s.keyword, s.name) >= 2).map(s => {
     const text = () => expand(s.text);
     return { id: `sn-${s.keyword}`, title: s.name, subtitle: `스니펫 · ${expand(s.text).split("\n")[0].slice(0, 30)}`,
       kind: "snippet" as const, glyph: "snippet", actions: [
@@ -165,9 +169,24 @@ function commands(q: string, ui: Ui): Scored[] {
     keys: `노트 note obsidian 옵시디언 ${KIND_LABELS[n.kind]?.title ?? ""}`, run: async u => u.openNotes(n.id) }));
   return [...notes, ...COMMANDS].map(c => ({ c, s: score(q, c.title, c.keys) }))
     .filter(x => x.s >= (q.length < 2 ? 3 : 1)).sort((a, b) => b.s - a.s).slice(0, 5)
-    .map(({ c, s }) => ({ s, item: { id: c.id, title: c.title, kind: c.id.startsWith("note-") ? "wiki" as const : "cmd" as const,
-      subtitle: c.id.startsWith("w-") ? "창 관리" : c.id.startsWith("note-") ? "노트 검색" : "명령",
-      glyph: c.glyph, actions: [{ title: "실행", confirm: c.confirm, run: () => c.run(ui) }] } }));
+    .map(({ c, s }) => ({ s, item: cmdItem(c, ui) }));
+}
+
+const cmdItem = (c: Cmd, ui: Ui): Item => ({ id: c.id, title: c.title, kind: c.id.startsWith("note-") ? "wiki" : "cmd",
+  subtitle: c.id.startsWith("w-") ? "창 관리" : c.id.startsWith("note-") ? "노트 검색" : "명령",
+  glyph: c.glyph, actions: [{ title: "실행", confirm: c.confirm, run: () => c.run(ui) }] });
+
+// 기능 목록 화면: 입력이 없으면 전부, 있으면 이름·키워드로 좁힘
+export function featureItems(f: Feature, q: string, ui: Ui): Item[] {
+  q = q.trim();
+  const pre = { window: "w-", system: "s-", tools: "b-" } as Record<Feature, string>;
+  const items: Item[] = f === "quicklinks"
+    ? config.quicklinks.map(l => ({ id: `ql-${l.keyword}`, title: l.name, subtitle: `${l.keyword} 검색어 · Enter로 입력 시작`, kind: "link" as const, glyph: "link",
+        actions: [{ title: "검색어 입력하기", keep: true, run: async () => ui.setQuery(`${l.keyword} `) },
+          { title: "URL 복사", run: () => copy(l.url) }] }))
+    : f === "snippets" ? snippets("", true).map(it => ({ ...it, subtitle: `;${it.id.slice(3)} · ${it.subtitle.replace(/^스니펫 · /, "")}` }))
+    : COMMANDS.filter(c => c.id.startsWith(pre[f])).map(c => cmdItem(c, ui));
+  return q ? items.filter(it => score(q, it.title, it.subtitle) >= 1) : items;
 }
 
 // 설치된 확장의 명령. keyword가 있으면 "keyword 내용"의 내용을 스크립트에 넘김
@@ -218,6 +237,8 @@ export function homeItems(ui: Ui): Item[] {
     ({ id: `home-${id}`, title, subtitle, kind, glyph, actions: [{ title: "입력하기", keep: true, run: async () => ui.setHint(`예: ${example.trim()}`) }] });
   const go = (id: string, glyph: string, kind: Kind, title: string, subtitle: string, label: string, run: () => Promise<unknown>, keep = false): Item =>
     ({ id: `home-${id}`, title, subtitle, kind, glyph, actions: [{ title: label, keep, run }] });
+  const feat = (f: Feature, glyph: string, kind: Kind, subtitle: string): Item =>
+    go(f, glyph, kind, FEATURE_TITLES[f], subtitle, "목록 보기", async () => ui.openFeature(f), true);
   return [
     go("apps", "app", "app", "앱 실행", "설치된 앱 전체 보기 · 이름으로 좁히기", "열기", async () => ui.openApps(), true),
     go("files", "file", "cmd", "파일 찾기", "홈 · 외장 디스크에서 이름으로 찾고 Finder로 위치 보기", "열기", async () => ui.openFiles(), true),
@@ -226,10 +247,11 @@ export function homeItems(ui: Ui): Item[] {
     ex("calc", "calc", "calc", "계산기", "수식 입력 · 예: 12*3+4", "12*3+4"),
     ex("notesAi", "notesAi", "ai", "내 노트에게 묻기", config.ai_ready ? "질문 입력 후 ⌘↵ · 내 Obsidian 노트에서 찾아 출처와 함께 답해요" : "설정에서 AI 연결 필요", "Tauri에서 링크를 기본 브라우저로 여는 방법"),
     ex("ai", "ai", "ai", "AI에게 묻기", config.ai_ready ? `질문 입력 후 Tab · ${config.ai_model}` : "설정에서 AI 연결 필요", "맥북 생산성 단축키 3개 추천해줘"),
-    ex("window", "left", "cmd", "창 관리", "창 · 왼쪽/오른쪽 절반, 최대화", "창"),
-    ex("links", "link", "link", "퀵링크", config.quicklinks.map(l => l.keyword).join(", ") + " + 검색어", config.quicklinks[0] ? `${config.quicklinks[0].keyword} ` : "yt "),
-    ex("snippets", "snippet", "snippet", "스니펫", config.snippets.map(s => s.keyword).join(", "), config.snippets[0]?.keyword ?? "today"),
-    ex("system", "moon", "cmd", "시스템 명령", "잠자기, 화면 잠금, 휴지통 비우기, 다크 모드", "휴지통"),
+    feat("window", "left", "cmd", "창 · 왼쪽/오른쪽 절반, 최대화"),
+    feat("quicklinks", "link", "link", config.quicklinks.map(l => l.keyword).join(", ") + " + 검색어"),
+    feat("snippets", "snippet", "snippet", config.snippets.map(s => s.keyword).join(", ")),
+    feat("system", "moon", "cmd", "잠자기, 화면 잠금, 휴지통 비우기, 다크 모드"),
+    feat("tools", "settings", "cmd", "설정, 단축키, 확장 스토어, 노트 검색 관리 등"),
     ...config.note_searches.map(n => go(`note-${n.id}`, KIND_LABELS[n.kind]?.glyph ?? "doc", "wiki", n.name,
       `노트 검색 · ${KIND_LABELS[n.kind]?.title ?? n.kind}`, "열기", async () => ui.openNotes(n.id), true)),
     go("graph", "graph", "wiki", "노트 그래프", "Obsidian 전체 노트의 연결을 그래프로", "열기", async () => ui.openGraph(), true),
