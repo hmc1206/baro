@@ -18,6 +18,9 @@ import { useStudy, studyItem } from "./app/useStudy";
 import { clipDay, clipTime, now } from "./app/memo";
 import { parseDoc, serializeDoc, titleOf, type DocFields } from "./app/docfields";
 import { groupByKind } from "./app/filekinds";
+import { useCalendar } from "./app/useCalendar";
+import { MonthGrid } from "./app/MonthGrid";
+import { DateBar } from "./app/DateBar";
 import { ItemList, ResultView, AiView, PwForm, SearchForm, MissingLinks, LinksPanel, MemoSide, ClipPreview, FilePreviewPane, type FilePrev, ActionMenu, Footer, DocEditor } from "./app/views";
 
 export default function App() {
@@ -142,6 +145,8 @@ export default function App() {
   const loadClips = () => Promise.all([invoke<Clip[]>("clip_list"), invoke<boolean>("clip_enabled")])
     .then(([list, enabled]) => setClips({ list, enabled })).catch(() => {});
   const openClip = () => { enter("clip"); loadClips(); };
+  const { cal, redate, cancelRedate, draft: calDraft, setPick: setCalPick, target: calTarget, setTarget: setCalTarget, pickDay, month, moveMonth, loadCal, calItems } = useCalendar({ q, setQ });
+  const openCal = () => { enter("cal"); cancelRedate(); loadCal(); };
   // 클립보드 기록 목록: 검색어가 있으면 글 안에서 찾기. 맨 끝에 기록 끄기·모두 지우기
   const clipItems = (): Item[] => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -218,7 +223,7 @@ export default function App() {
   };
   const openExamples = (doc: Doc) => { setExDoc({ doc, prevQ: q }); setQ(""); setMode("examples"); };
   const ui: Ui = {
-    ask, askNotes, openStore, openNotes, openGraph, openFiles, openMemo: () => openMemo(), openClip, openNoteManager, openHotkeys, togglePin,
+    ask, askNotes, openStore, openNotes, openGraph, openFiles, openMemo: () => openMemo(), openClip, openNoteManager, openHotkeys, togglePin, openCal,
     show: v => { setAi(null); setView(v); },
     setQuery: text => { setMode(null); setHint(""); setQ(text); input.current?.focus(); }, // 처음 검색 화면으로 가서 입력
     openApps: () => enter("apps"),
@@ -388,6 +393,7 @@ export default function App() {
     : mode === "feature" ? featureItems(feature, q, ui)
     : mode === "memo" ? memoItems()
     : mode === "clip" ? clipItems()
+    : mode === "cal" ? calItems()
     : home ? homeItems(ui) : [...top, ...files, ...bottom];
   const graphOn = mode === "note" && graph;
   useEffect(() => {
@@ -397,7 +403,7 @@ export default function App() {
   });
   const memoPickAt = mode === "memo" ? items.findIndex(i => i.id === "memo-pick") : -1; // 빠른 메모: 저장할 곳 칸 수 (그 뒤는 고르기·사진·클립보드)
   // 창 크기 종류: 그래프는 가장 크게, 미리보기가 있는 화면·AI 답변은 넓게. 종류마다 사용자가 맞춘 크기를 기억
-  const sizeKind = graphOn ? "graph" : ai || mode === "note" || mode === "docEdit" || mode === "memo" || mode === "clip" ? "wide" : "normal";
+  const sizeKind = graphOn ? "graph" : ai || mode === "note" || mode === "docEdit" || mode === "memo" || mode === "clip" ? "wide" : mode === "cal" ? "graph" : "normal";
   useEffect(() => { invoke("set_view", { kind: sizeKind }); }, [sizeKind]);
   const curClip = mode === "clip" ? clips.list.find(c => `clip-${c.at}` === items[sel]?.id) : undefined;
   // 커리큘럼 허브: 그래프에는 단계 대신 연결된 단계 노트를 보여 주고, 고르면 허브 단계로
@@ -453,6 +459,7 @@ export default function App() {
     else if (action === "files") openFiles();
     else if (action === "memo") openMemo();
     else if (action === "clipboard") openClip();
+    else if (action === "calendar") openCal();
     else if (mode !== null && mode !== "store" && mode !== "noteEdit" && mode !== "docEdit") enter(null); // 편집 중인 노트는 창을 다시 열어도 그대로
     input.current?.focus(); input.current?.select();
   };
@@ -713,10 +720,11 @@ export default function App() {
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !menu && pick) setPick(null);
     if (e.key === "ArrowDown") { e.preventDefault(); setPending(null); move(s => Math.min(s + 1, n - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setPending(null); move(s => Math.max(s - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); run(menu ? cur?.actions[asel] : cur?.actions[0]); }
+    // 확인을 묻는 중이면 (⌘D 삭제 등) Enter는 그 동작을 실행
+    else if (e.key === "Enter") { e.preventDefault(); run(menu ? cur?.actions[asel] : cur?.actions.find(x => pending?.key === `${cur.id}:${x.title}`) ?? cur?.actions[0]); }
     // Esc: 확인 취소 → 액션 패널 닫기 → 입력 지우기 → 예시 지우기 → 이전 화면 → 창 닫기
     else if (e.key === "Escape") {
-      if (pending) setPending(null); else if (menu) setMenu(false); else if (mode === "files" && fileOpen) { setFileOpen(null); setSel(0); } else if (q) setQ(""); else if (hint) setHint("");
+      if (pending) setPending(null); else if (menu) setMenu(false); else if (mode === "files" && fileOpen) { setFileOpen(null); setSel(0); } else if (mode === "cal" && redate) cancelRedate(); else if (q) setQ(""); else if (hint) setHint("");
       else if (mode !== null) back(); else invoke("close_window");
     }
   };
@@ -724,6 +732,7 @@ export default function App() {
   const onKey = (e: KeyboardEvent) => {
     if (keyForms(e)) return;
     if (document.activeElement !== input.current && !(view || ai)) input.current?.focus();
+    if (mode === "cal" && e.metaKey && (e.code === "BracketLeft" || e.code === "BracketRight")) { e.preventDefault(); moveMonth(e.code === "BracketLeft" ? -1 : 1); return; }
     if (keyGlobal(e) || keyView(e) || keyMemo(e) || keyAi(e) || keyNotes(e) || keyShortcut(e)) return;
     keyList(e);
   };
@@ -743,7 +752,7 @@ export default function App() {
     ? [[view.kind === "perm" ? (view.perm === "ok" ? "" : "시스템 설정 열기") : "결과 복사", ["↵"]], ["돌아가기", ["esc"]]]
     : ai ? [["답변 복사", ["⇧", "↵"]], ...(ai.notes ? [] : [["노트에서 다시 묻기", ["⌘", "↵"]] as [string, string[]]]), ai.saved ? ["Obsidian에서 열기", ["⌘", "O"]] : ["Obsidian에 저장", ["⌘", "S"]], ["돌아가기", ["esc"]]]
     : hk.recording ? [["취소", ["esc"]]]
-    : cur ? [[cur.actions[0].title, ["↵"]], ...(quick ? [[quick.title, [...quick.shortcut!]] as [string, string[]]] : []),
+    : cur?.actions[0] ? [[cur.actions[0].title, ["↵"]], ...(quick ? [[quick.title, [...quick.shortcut!]] as [string, string[]]] : []),
       ...(mode === "note" && notes.search?.kind === "passwords" ? [[reveal ? "가리기" : "보기", ["⌘", "R"]] as [string, string[]]] : []),
       ...(mode === "note" && !conc ? [[graph ? "목록" : "그래프", ["⌘", "G"]] as [string, string[]]] : []),
       ...(graphOn ? [[local ? `로컬 ${local}단계` : "로컬", ["⌘", "L"]] as [string, string[]]] : []), ["액션", ["⌘", "K"]]] : [];
@@ -758,6 +767,7 @@ export default function App() {
     : mode === "files" ? "파일 이름 (홈 · 외장 디스크)"
     : mode === "apps" ? "앱 이름 입력 · 예: Safari, 메모"
     : mode === "feature" ? `${FEATURE_TITLES[feature]} · 이름으로 좁히기 · Esc 처음으로`
+    : mode === "cal" ? (redate ? "제목 고치기 · 날짜는 아래 버튼이나 달력 칸 · Enter 저장 · ⌘D 삭제 · Esc 취소" : "할 일 입력 · 예: 내일 오후 3시 치과, 12/1~12/5 워크숍, 금요일까지 보고서")
     : mode === "clip" ? "복사했던 글 검색"
     : mode === "memo" ? (picking ? "노트 이름 검색 (비우면 폴더 보기) · Esc 취소" : memo.shot ? "스크린샷 이름 겸 메모 · Enter 저장 · ⌘I 빼기" : "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 바꾸기")
     : hint || "앱, 파일, 명령, 계산, AI에게 묻기";
@@ -765,6 +775,7 @@ export default function App() {
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`
     : mode === "apps" ? (q.trim() ? `앱 ${appRows.length}개` : `설치된 앱 ${appRows.length}개`)
     : mode === "feature" ? `${FEATURE_TITLES[feature]} ${items.length}개`
+    : mode === "cal" ? (cal.loading ? "노션에서 불러오는 중…" : cal.error ? "캘린더 · 노션 연결 필요" : cal.msg ?? `캘린더 · 일정 ${cal.events.length}개 · DB ${cal.dbs.length}개 · Enter 완료 · ⌘O 노션 · ⌘R 새로고침`)
     : mode === "files" ? (found.loading ? (q.trim() ? "찾는 중…" : "최근 파일 불러오는 중…") : fileOpen ? `${fileOpen}만 보는 중 · Esc 전체 종류`
       : q.trim() ? `파일 ${found.items.length}개 · 종류별` : `최근 90일 파일 ${found.items.length}개 · 종류별 · 이름을 입력하면 전체에서 찾기`)
     : mode === "clip" ? (q.trim() ? `찾은 기록 ${items.filter(i => i.id.startsWith("clip-") && !["clip-toggle", "clip-clear"].includes(i.id)).length}개` : clips.enabled ? null : "기록을 멈춘 상태예요")
@@ -780,13 +791,14 @@ export default function App() {
     : mode === "feature" ? (!items.length ? (q.trim() ? "일치하는 항목이 없어요." : "아직 없어요. Baro 설정(config.json)에서 추가해요.") : null)
     : mode === "files" ? (!found.loading && !found.items.length ? (q.trim() ? "일치하는 파일이 없어요." : "최근 90일에 바뀐 파일이 없어요.") : null)
     : mode === "memo" ? memo.error
+    : mode === "cal" ? cal.error ?? (!cal.loading && !items.length ? (q.trim() ? "일치하는 일정이 없어요." : "앞으로 60일 동안 일정이 없어요. 할 일을 입력해 추가해 보세요.") : null)
     : mode === "clip" ? (!clips.list.length ? "아직 기록이 없어요. 글을 복사하면 여기에 쌓여요 (비밀번호·키처럼 보이는 글은 빼요)." : q.trim() && !items.length ? "일치하는 기록이 없어요." : null)
     : mode === null && q && !items.length ? "결과가 없습니다. 다른 이름으로 검색해 보세요." : null;
 
   const missingEl = curDoc && curLinks?.missing.length
     ? <MissingLinks names={curLinks.missing} vault={notes.search?.id === "__vault"} onCreate={n => createConcept(curDoc, n)} /> : null;
   const listEl = <ItemList listRef={list} header={header} items={items} sel={sel}
-    warn={mode === "hotkeys" ? hk.error : null} empty={mode !== "hotkeys" ? empty : null}
+    warn={mode === "hotkeys" ? hk.error : mode === "cal" && cal.errors.length ? `일부를 못 읽었어요: ${cal.errors.join(" / ")}` : null} empty={mode !== "hotkeys" ? empty : null}
     onRow={(it, i) => menu ? undefined : sel !== i ? (setSel(i), setPending(null)) : run(it.actions[0], it)} />;
   const pickDoc = (d: Doc) => { setPick(d); setMenu(false); };
 
@@ -799,6 +811,7 @@ export default function App() {
         rows={Math.min(6, q.split("\n").length)} onChange={e => setQ(e.target.value)} />
         : mode !== "noteEdit" && mode !== "pwEdit" && mode !== "docEdit" && <input ref={input} className="search" value={q} autoFocus spellCheck={false} placeholder={placeholder}
         onChange={e => setQ(e.target.value)} />}
+      {mode === "cal" && calDraft && !view && !ai && <DateBar draft={calDraft} setPick={setCalPick} target={calTarget} setTarget={setCalTarget} />}
       {view ? <ResultView view={view} perm={perm} />
       : ai ? <AiView ai={ai} onOpen={openObsidian} />
       : mode === "pwEdit" && pw ? <PwForm pw={pw} setPw={setPw} folder={notes.search?.name} onSave={savePw} onCancel={() => { setPw(null); setMode("note"); }} />
@@ -820,6 +833,17 @@ export default function App() {
       ) : mode === "files" ? (
         // 파일 찾기: 왼쪽 목록 + 오른쪽 고른 파일 내용
         <div className="split files-split">{listEl}<FilePreviewPane path={cur?.path} prev={filePrev?.path === cur?.path ? filePrev?.prev : undefined} loading={!!filePrev?.loading} /></div>
+      ) : mode === "cal" ? (
+        // 캘린더: 왼쪽 목록 + 오른쪽 한 달 달력. 달력에서 일정을 누르면 목록에서 고르고, 고른 걸 다시 누르면 실행
+        <div className="split cal-split">{listEl}<MonthGrid month={month} events={cal.events} loading={cal.loading}
+          selected={cur?.id.startsWith("cal-") ? cur.id.slice(4) : undefined} onMove={moveMonth}
+          range={calDraft ? { start: calDraft.date, end: calDraft.end?.date ?? null } : undefined} onDay={calDraft ? pickDay : undefined}
+          onPick={ev => {
+            const i = items.findIndex(it => it.id === `cal-${ev.id}`);
+            if (i < 0) invoke("open_url", { url: ev.url.replace(/^https:\/\//, "notion://") });
+            else if (i === sel) run(items[i].actions[0], items[i]);
+            else { setSel(i); setPending(null); }
+          }} /></div>
       ) : mode === "clip" ? (
         // 클립보드 기록: 왼쪽 목록 + 오른쪽 전체 내용
         <div className="split">{listEl}<ClipPreview clip={curClip} fallback={cur?.subtitle} /></div>

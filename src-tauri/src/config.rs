@@ -16,6 +16,11 @@ pub struct NoteSearch { pub id: String, pub name: String, pub dir: String, pub k
 
 pub const NOTE_KINDS: &[&str] = &["commands", "notes", "snippets", "passwords", "curriculum", "write"];
 
+// 노션 계정: 내부 통합 토큰(notion.so/my-integrations)과 캘린더 색. databases가 비면 통합에 연결된 날짜 DB 전부
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct NotionAccount { pub name: String, pub token: String, pub color: String, pub databases: Vec<String> }
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Config {
@@ -41,10 +46,12 @@ pub struct Config {
     pub clipboard_history: bool,
     // 스니펫 자동 확장: 어느 앱에서든 ";키워드" 입력 → 본문 (입력 모니터링 권한 필요, 기본 꺼짐)
     pub snippet_expand: bool,
+    // 캘린더·할 일: 노션 계정 여러 개의 일정 DB를 합쳐 보기
+    pub notion_accounts: Vec<NotionAccount>,
 }
 
 // 고정 기능의 단축키 기본값
-pub const HOTKEY_ACTIONS: &[(&str, &str)] = &[("baro", "Alt+Space"), ("ai", ""), ("store", ""), ("graph", ""), ("files", ""), ("memo", ""), ("clipboard", "")];
+pub const HOTKEY_ACTIONS: &[(&str, &str)] = &[("baro", "Alt+Space"), ("ai", ""), ("store", ""), ("graph", ""), ("files", ""), ("memo", ""), ("clipboard", ""), ("calendar", "")];
 
 fn ql(k: &str, n: &str, u: &str) -> Quicklink { Quicklink { keyword: k.into(), name: n.into(), url: u.into() } }
 fn sn(k: &str, n: &str, t: &str) -> Snippet { Snippet { keyword: k.into(), name: n.into(), text: t.into() } }
@@ -77,6 +84,7 @@ impl Default for Config {
             vault_dir: "/Volumes/Disk/MyBrain".into(),
             clipboard_history: true,
             snippet_expand: false,
+            notion_accounts: vec![],
         }
     }
 }
@@ -121,6 +129,7 @@ pub struct PublicConfig {
     pub snippets: Vec<Snippet>,
     pub store_ready: bool,
     pub note_searches: Vec<NoteSearch>,
+    pub notion_accounts: usize, // 토큰을 넣은 노션 계정 수 (토큰은 화면에 넘기지 않음)
     pub error: Option<String>,
 }
 
@@ -130,9 +139,10 @@ pub fn public(path: &Path) -> PublicConfig {
             ai_ready: c.ai_provider != "claude" || !c.anthropic_api_key.trim().is_empty(),
             ai_model: if c.ai_provider == "claude" { c.ai_model } else { c.ollama_model },
             store_ready: !c.store_url.trim().is_empty(), quicklinks: c.quicklinks, snippets: c.snippets,
+            notion_accounts: c.notion_accounts.iter().filter(|a| !a.token.trim().is_empty()).count(),
             note_searches: c.note_searches, error: None },
         Err(e) => PublicConfig { ai_ready: false, ai_model: String::new(), quicklinks: vec![], snippets: vec![], store_ready: false,
-            note_searches: vec![], error: Some(e) },
+            note_searches: vec![], notion_accounts: 0, error: Some(e) },
     }
 }
 

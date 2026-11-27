@@ -284,3 +284,58 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 /* 미리보기 글: 한 줄을 읽기 좋은 길이로 (표·코드·그림은 넓게 둠) */
 .preview .md > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, details) { max-width: 68ch; }
 .preview .md :is(h1, h2, h3) { text-wrap: balance; }
+
+/* 캘린더: 왼쪽 목록 + 오른쪽 한 달 달력 */
+.cal-split .list { flex: 0 0 34%; }
+/* 캘린더 목록도 두 줄 (제목 / 시간·계정·DB) */
+.cal-split .row { flex-wrap: wrap; row-gap: 0; padding: 6px 10px; }
+.cal-split .row .icon { align-self: center; }
+.cal-split .row .title { flex: 1 1 calc(100% - 40px); max-width: none; }
+.cal-split .row .sub { flex: 1 1 100%; padding-left: 36px; margin-top: -2px; font-size: 11.5px; white-space: normal; }
+.month { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 10px 12px 12px; }
+.month-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.month-title { font-size: 15px; font-weight: 650; }
+.month-load { font-size: 11px; color: var(--muted); }
+.month-nav { margin-left: auto; display: flex; gap: 4px; }
+.month-nav button { border: 1px solid var(--line); background: var(--field); color: var(--text); border-radius: 7px; padding: 2px 9px; font: inherit; font-size: 12px; cursor: pointer; }
+.month-nav button:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.month-grid { flex: 1; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-height: 0; background: var(--line); gap: 1px; }
+.month-wds { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; }
+.month-wd { background: var(--surface); font-size: 11px; color: var(--muted); text-align: center; padding: 4px 0; }
+.month-wd.sun { color: var(--danger); }
+.month-wd.sat { color: #4C8DF6; }
+.month-week { flex: 1; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); column-gap: 1px; row-gap: 2px; min-height: 0; overflow: hidden; }
+.month-cell { position: relative; background: var(--surface); padding: 3px 4px; min-height: 0; }
+.month-cell.out { opacity: .45; }
+.month-cell.picked { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.month-day { display: inline-block; font-size: 11px; color: var(--muted); min-width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 9px; }
+.month-cell.today .month-day { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+/* 일정 막대: 여러 날이면 칸을 가로질러 하나로, 앞/뒤 주로 이어지면 그쪽 모서리를 각지게 */
+.month-ev { position: relative; z-index: 1; display: flex; align-items: center; gap: 3px; min-width: 0; margin: 0 3px; border: 0; border-left: 3px solid var(--ev); border-radius: 4px; padding: 0 4px;
+  background: color-mix(in srgb, var(--ev) 16%, transparent); color: var(--text); font: inherit; font-size: 11px; line-height: 18px; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.month-ev.multi { background: color-mix(in srgb, var(--ev) 30%, transparent); font-weight: 600; }
+.month-ev.cut-s { margin-left: 0; border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 7px; }
+.month-ev.cut-e { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.month-ev.on { outline: 1.5px solid var(--ev); }
+.month-ev.done { opacity: .55; text-decoration: line-through; }
+.month-box { flex-shrink: 0; width: 10px; height: 10px; border: 1px solid var(--ev); border-radius: 3px; font-size: 8px; line-height: 9px; text-align: center; }
+.month-time { flex-shrink: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.month-more { position: absolute; right: 4px; bottom: 2px; font-size: 10px; color: var(--muted); }
+
+/* 캘린더 입력칸 아래 날짜 버튼 */
+.datebar { margin: -2px 14px 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--field); display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.datebar-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.datebar-k { width: 52px; flex-shrink: 0; color: var(--muted); font-size: 11.5px; }
+.chip { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 999px; padding: 1px 9px; font: inherit; font-size: 12px; cursor: pointer; }
+.chip:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.datebar-time { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 8px; padding: 0 6px; font: inherit; font-size: 12px; color-scheme: inherit; }
+.datebar-sum { color: var(--accent-text); font-weight: 600; font-size: 12px; padding-left: 56px; }
+.datebar-sum span { color: var(--muted); font-weight: 400; }
+/* 날짜를 고르는 중: 달력 칸을 누를 수 있고, 고른 기간은 강조 */
+.month.picking .month-cell { cursor: pointer; }
+.month.picking .month-cell:hover { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.month-cell.in-range { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+.month-cell.range-edge .month-day { outline: 1.5px solid var(--accent); }
+.datebar-time.empty { opacity: .45; }

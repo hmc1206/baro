@@ -21,7 +21,7 @@ export function Icon({ it }: { it: Item }) {
   }, [it.path]);
   if (src) return <img className="icon" src={src} alt="" />;
   const Svg = it.glyph ? ICONS[it.glyph] : undefined;
-  return <span className={`icon glyph ${it.kind}`}>{Svg ? <Svg size={15} strokeWidth={2.2} /> : (it.glyph ?? it.title[0])}</span>;
+  return <span className={`icon glyph ${it.kind}`} style={it.color ? { color: it.color } : undefined}>{Svg ? <Svg size={15} strokeWidth={2.2} /> : (it.glyph ?? it.title[0])}</span>;
 }
 
 // 왼쪽 목록: 구역 제목, 항목, 빈 안내

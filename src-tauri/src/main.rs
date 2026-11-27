@@ -9,6 +9,7 @@ mod expand;
 mod extensions;
 mod indexer;
 mod log;
+mod notion;
 mod rag;
 mod search;
 mod shot;
@@ -203,6 +204,50 @@ async fn files_recent() -> Vec<String> {
 #[tauri::command]
 async fn files_wide(q: String) -> Vec<String> {
     tauri::async_runtime::spawn_blocking(move || system::find_files_wide(&q, 60)).await.unwrap_or_default()
+}
+
+// 캘린더·할 일: 노션 계정들의 일정 DB를 합쳐 읽기·쓰기
+#[derive(serde::Serialize)]
+struct CalData { events: Vec<notion::Event>, dbs: Vec<notion::Db>, errors: Vec<String> }
+
+fn notion_accounts(app: &AppHandle) -> Result<Vec<config::NotionAccount>, String> {
+    let a = config::load(&config_file(app))?.notion_accounts;
+    if a.iter().all(|x| x.token.trim().is_empty()) { return Err("NO_ACCOUNT".into()); }
+    Ok(a)
+}
+
+#[tauri::command]
+async fn notion_events(start: String, end: String, fresh: bool, app: AppHandle) -> Result<CalData, String> {
+    let accts = notion_accounts(&app)?;
+    if fresh { notion::invalidate_all(); }
+    let (events, mut errors) = notion::events(&accts, &start, &end).await?;
+    let (dbs, e2) = notion::databases(&accts).await;
+    errors.extend(e2);
+    Ok(CalData { events, dbs, errors })
+}
+
+#[tauri::command]
+async fn notion_create(db_id: String, title: String, start: String, end: Option<String>, app: AppHandle) -> Result<(), String> {
+    let accts = notion_accounts(&app)?;
+    let db = notion::find_db(&accts, &db_id).await?;
+    notion::create(&accts, &db, &title, &start, end.as_deref()).await
+}
+
+#[tauri::command]
+async fn notion_done(account: String, page: String, prop: String, done: bool, app: AppHandle) -> Result<(), String> {
+    notion::set_done(&notion_accounts(&app)?, &account, &page, &prop, done).await
+}
+
+#[tauri::command]
+async fn notion_edit(account: String, page: String, db_id: String, title: String, start: String, end: Option<String>, app: AppHandle) -> Result<(), String> {
+    let accts = notion_accounts(&app)?;
+    let db = notion::find_db(&accts, &db_id).await?;
+    notion::edit(&accts, &account, &page, &db, &title, &start, end.as_deref()).await
+}
+
+#[tauri::command]
+async fn notion_trash(account: String, page: String, restore: bool, app: AppHandle) -> Result<(), String> {
+    notion::trash(&notion_accounts(&app)?, &account, &page, restore).await
 }
 
 #[tauri::command]
@@ -595,7 +640,8 @@ fn main() {
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,
             cmd_notes::notes_load, cmd_notes::note_set_field, cmd_notes::note_toggle_task, cmd_notes::note_add_evidence, cmd_notes::note_edit_evidence, cmd_notes::note_stage_status, cmd_notes::note_task_state, cmd_notes::notes_named, cmd_notes::note_add_record, cmd_notes::memo_daily, cmd_notes::memo_daily_read, cmd_notes::memo_daily_path, cmd_notes::shot_latest, cmd_notes::shot_save, cmd_notes::shot_read, cmd_notes::memo_remove, cmd_notes::memo_restore, cmd_notes::memo_replace, cmd_notes::clipboard_text, cmd_notes::note_create, cmd_notes::note_read, cmd_notes::note_write, save_note_search, delete_note_search, pick_folder,
-            close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, cmd_notes::concept_create, snippet_expand_set, snippet_expand_state])
+            close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, cmd_notes::concept_create, snippet_expand_set, snippet_expand_state,
+            notion_events, notion_create, notion_done, notion_edit, notion_trash])
         .build(tauri::generate_context!())
         .expect("Baro 실행 실패")
         .run(|app, e| {

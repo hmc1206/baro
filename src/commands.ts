@@ -9,11 +9,11 @@ export type Action = { title: string; confirm?: string; keep?: boolean; shortcut
 export type Kind = "app" | "file" | "calc" | "web" | "ai" | "cmd" | "link" | "snippet" | "ext" | "store" | "wiki";
 // actions[0]이 Enter로 실행되는 기본 동작, 나머지는 ⌘K 패널에서 선택
 // section: 목록에서 이 항목 위에 보일 묶음 제목 (앞 항목과 다를 때만 표시)
-export type Item = { id: string; title: string; subtitle: string; kind: Kind; glyph?: string; path?: string; section?: string; actions: Action[] };
+export type Item = { id: string; title: string; subtitle: string; kind: Kind; glyph?: string; path?: string; section?: string; color?: string; actions: Action[] };
 type AppEntry = { name: string; alias: string; path: string };
 type Quicklink = { keyword: string; name: string; url: string };
 type Snippet = { keyword: string; name: string; text: string };
-export type Config = { ai_ready: boolean; ai_model: string; quicklinks: Quicklink[]; snippets: Snippet[]; store_ready: boolean; note_searches: NoteSearch[]; error: string | null };
+export type Config = { ai_ready: boolean; ai_model: string; quicklinks: Quicklink[]; snippets: Snippet[]; store_ready: boolean; note_searches: NoteSearch[]; notion_accounts?: number; error: string | null };
 type ExtCommand = { name: string; title: string; keywords: string; keyword: string; mode: "copy" | "view" | "open" | "silent"; script: string };
 export type Manifest = { id: string; name: string; description: string; version: string; author: string; commands: ExtCommand[] };
 export type StoreEntry = { id: string; name: string; description: string; version: string; author: string };
@@ -21,7 +21,7 @@ export type StoreEntry = { id: string; name: string; description: string; versio
 // 목록 밖의 화면: 텍스트 결과, 권한 안내
 export type View = { kind: "text"; title: string; text: string; error?: boolean } | { kind: "perm"; perm: string };
 // 화면(App)이 넘겨주는 동작들
-export type Ui = { ask: (q: string) => void; askNotes: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openClip: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void; openApps: () => void; setHint: (hint: string) => void; openFeature: (f: Feature) => void };
+export type Ui = { ask: (q: string) => void; askNotes: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openClip: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void; openApps: () => void; setHint: (hint: string) => void; openFeature: (f: Feature) => void; openCal: () => void };
 
 const isMac = navigator.userAgent.includes("Mac");
 let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, note_searches: [], error: null };
@@ -103,6 +103,7 @@ const COMMANDS: Cmd[] = [
   { id: "b-pin", title: "창 고정·해제", keys: "pin float always on top 고정 항상 위", glyph: "pin", run: async ui => ui.togglePin() },
   { id: "b-files", title: "파일 찾기 (Finder)", keys: "files finder find 파일 찾기 위치 폴더", glyph: "file", run: async ui => ui.openFiles() },
   { id: "b-memo", title: "빠른 메모", keys: "memo note 메모 기록 적기 daily 데일리 공부 기록", glyph: "memo", run: async ui => ui.openMemo() },
+  { id: "b-cal", title: "캘린더 · 할 일", keys: "calendar todo 캘린더 할일 일정 노션 notion", glyph: "daily", run: async ui => ui.openCal() },
   { id: "b-clip", title: "클립보드 기록", keys: "clipboard history 클립보드 기록 복사 붙여넣기 paste", glyph: "clip", run: async ui => ui.openClip() },
   { id: "b-expand", title: "스니펫 자동 입력 켜기·끄기", keys: "snippet expand text expansion 스니펫 자동 입력 확장 치환 세미콜론", glyph: "snippet",
     run: async ui => {
@@ -244,6 +245,7 @@ export function homeItems(ui: Ui): Item[] {
     go("apps", "app", "app", "앱 실행", "설치된 앱 전체 보기 · 이름으로 좁히기", "열기", async () => ui.openApps(), true),
     go("files", "file", "cmd", "파일 찾기", "홈 · 외장 디스크에서 이름으로 찾고 Finder로 위치 보기", "열기", async () => ui.openFiles(), true),
     go("memo", "memo", "cmd", "빠른 메모", "오늘 Daily나 공부 중인 단계의 내 기록에 한 줄 적기", "열기", async () => ui.openMemo(), true),
+    go("cal", "daily", "cmd", "캘린더 · 할 일", config.notion_accounts ? `노션 계정 ${config.notion_accounts}개 일정 합쳐 보기 · 입력해서 할 일 추가` : "노션 계정을 연결해 일정 합쳐 보기 · 할 일 추가", "열기", async () => ui.openCal(), true),
     go("clip", "clip", "cmd", "클립보드 기록", "복사했던 글을 다시 찾아 붙여넣기", "열기", async () => ui.openClip(), true),
     ex("calc", "calc", "calc", "계산기", "수식 입력 · 예: 12*3+4", "12*3+4"),
     ex("notesAi", "notesAi", "ai", "내 노트에게 묻기", config.ai_ready ? "질문 입력 후 ⌘↵ · 내 Obsidian 노트에서 찾아 출처와 함께 답해요" : "설정에서 AI 연결 필요", "Tauri에서 링크를 기본 브라우저로 여는 방법"),
