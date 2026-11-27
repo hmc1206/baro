@@ -161,8 +161,8 @@ function firstLine(body: string) {
 }
 
 // 커리큘럼 허브(머리말 type: curriculum-hub): "## 단계별 학습" 아래 "### 단계"가 단계 하나.
-// 상태는 "**단계 상태**: 학습 전 · 약 18시간 · 단계 노트: [[이름|…]]" 줄. 분야 순서: 프론트엔드 → 백엔드 → CS → 보안
-const FIELDS: Record<string, [number, string]> = { frontend: [0, "프론트엔드"], backend: [1, "백엔드"], cs: [2, "CS"], security: [3, "보안"] };
+// 상태는 "**단계 상태**: 학습 전 · 약 18시간 · 단계 노트: [[이름|…]]" 줄. 분야 순서: 프론트엔드 → 백엔드 → CS → 보안 → AI
+const FIELDS: Record<string, [number, string]> = { frontend: [0, "프론트엔드"], backend: [1, "백엔드"], cs: [2, "CS"], security: [3, "보안"], ai: [4, "AI"] };
 export function hubStages(hubs: Note[], stageNotes: Note[], chapters: Map<string, string>, reviews = new Map<string, string>()): Doc[] {
   const byName = new Map(stageNotes.map(n => [baseName(n.file), n]));
   const out: Doc[] = [];

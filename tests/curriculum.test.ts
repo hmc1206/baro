@@ -55,6 +55,13 @@ test("허브의 ### 단계를 분야 순서(프론트엔드 → 보안)로 읽�
   assert.equal(s[0].tasks?.length, 4);
 });
 
+test("AI 허브(field: ai)는 'AI' 이름으로 보안 다음에 옴", () => {
+  const ai = "---\ntype: curriculum-hub\nfield: ai\n---\n# AI\n\n## 단계별 학습\n\n### 1단계 LLM 기초\n\n**단계 상태**: 학습 전 · 약 15시간\n\n- [ ] [[AI-01-01 토큰|AI-01-01 토큰]] · 필수 · 선행: 없음 · 학습 전\n";
+  const s = hubStages([{ file: "/v/AI.md", folder: "", text: ai }, { file: "/v/Sec.md", folder: "", text: sec }], [], new Map()).sort(byStage);
+  assert.deepEqual(s.map(d => d.category), ["보안", "보안", "AI"]);
+  assert.deepEqual(conceptsOf(s[2]).map(c => c.name), ["AI-01-01 토큰"]);
+});
+
 test("개념 줄: 상태·우선순위·선행·허브 체크박스 번호, 보안은 핵심 개념 줄", () => {
   const [p01, , net] = stages();
   const cs = conceptsOf(p01);
