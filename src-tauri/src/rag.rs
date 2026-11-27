@@ -215,7 +215,11 @@ pub fn search(vault: &Path, skip_dirs: &[String], q: &str, n: usize) -> Vec<Hit>
     rank(&ix, q, None, n)
 }
 
-// 단어 검색(BM25) 순위와 뜻 검색(임베딩 코사인) 순위를 합침 (RRF: 1/(60+순위)). 노트 점수 = 가장 맞는 단락 + 나머지 조금
+// 뜻 검색 비중과 반영할 상위 단락 수 (검색 평가셋으로 정함)
+const VEC_W: f32 = 0.6;
+const VEC_TOP: usize = 30;
+
+// 단어 검색(BM25) 순위와 뜻 검색(임베딩 코사인) 순위를 합침 (RRF: 1/(60+순위), 뜻 쪽은 VEC_W배). 노트 점수 = 가장 맞는 단락 + 나머지 조금
 pub fn rank(ix: &Index, q: &str, qvec: Option<&[f32]>, n: usize) -> Vec<Hit> {
     const K: f32 = 60.0;
     let words = query_words(q);
@@ -228,9 +232,9 @@ pub fn rank(ix: &Index, q: &str, qvec: Option<&[f32]>, n: usize) -> Vec<Hit> {
         let mut vs: Vec<(f32, usize)> = ix.chunks.iter().enumerate()
             .filter_map(|(i, c)| crate::embed::score(qv, c.ekey).map(|v| (v * ix.docs[c.doc].weight, i))).collect();
         vs.sort_by(|a, b| b.0.total_cmp(&a.0));
-        vs.truncate(200);
+        vs.truncate(VEC_TOP);
         for (r, &(_, i)) in vs.iter().enumerate() {
-            *fused.entry(i).or_default() += 1.0 / (K + r as f32 + 1.0);
+            *fused.entry(i).or_default() += VEC_W / (K + r as f32 + 1.0);
             if r < 30 { vec_top.insert(i); }
         }
     }
