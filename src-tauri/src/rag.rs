@@ -337,4 +337,59 @@ mod tests {
         });
         for h in rank(&ix, &q, qv.as_deref(), 5) { println!("{} | {}자", h.file, h.excerpt.chars().count()); }
     }
+
+    // 검색 평가셋으로 hit@1·hit@3·MRR@10과 시간 재기 (실제 Vault, 앱과 같은 제외 폴더)
+    // cargo test --release vault_eval -- --ignored --nocapture
+    // BARO_EVAL=평가셋 JSON (기본 Vault/01_Projects/Baro/search-eval.json)
+    // BARO_EMBED=뜻 색인 파일의 복사본 → 단어 검색과 하이브리드(단어+뜻)를 둘 다 잼 (Ollama 필요)
+    #[test]
+    #[ignore]
+    fn vault_eval() {
+        let vault = Path::new("/Volumes/Disk/MyBrain");
+        let f = std::env::var("BARO_EVAL").unwrap_or_else(|_| vault.join("01_Projects/Baro/search-eval.json").to_string_lossy().into_owned());
+        let set: serde_json::Value = serde_json::from_slice(&std::fs::read(&f).expect("평가셋 파일")).expect("평가셋 JSON");
+        let cases = set["cases"].as_array().expect("cases 배열");
+        let ef = std::env::var("BARO_EMBED").ok();
+        if let Some(e) = &ef { crate::embed::init(Path::new(e)); }
+        // 앱처럼 비밀번호 모음 폴더는 뺌
+        let cfg = std::env::var("HOME").map(|h| Path::new(&h).join("Library/Application Support/dev.hmc.baro/config.json")).ok()
+            .and_then(|p| crate::config::load(&p).ok());
+        let skip = skip_list(&cfg.map(|c| c.note_searches.into_iter().filter(|n| n.kind == "passwords").map(|n| n.dir).collect::<Vec<_>>()).unwrap_or_default());
+        let t = std::time::Instant::now();
+        let ix = index(vault, &skip);
+        println!("색인: 노트 {}개, 단락 {}개, {} ms (캐시 없이 처음부터)", ix.docs.len(), ix.chunks.len(), t.elapsed().as_millis());
+        let root: String = format!("{}/", vault.display()).nfc().collect();
+        let rel = |file: &str| file.nfc().collect::<String>().trim_start_matches(root.as_str()).to_string();
+        let mut modes = vec![("단어(BM25)", false)];
+        if ef.is_some() { modes.push(("하이브리드(단어+뜻)", true)); }
+        for (name, hybrid) in modes {
+            let (mut h1, mut h3, mut rr, mut ms) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            let mut by_kind: std::collections::BTreeMap<String, (f32, f32)> = Default::default(); // kind → (hit@3 합, 개수)
+            println!("\n== {name}");
+            for c in cases {
+                let q = c["q"].as_str().unwrap_or_default();
+                let kind = c["kind"].as_str().unwrap_or("-").to_string();
+                let expect: Vec<String> = c["expect"].as_array().map(|a| a.iter().filter_map(|e| e.as_str()).map(|e| e.nfc().collect()).collect()).unwrap_or_default();
+                let qv = if hybrid {
+                    tauri::async_runtime::block_on(crate::embed::embed("http://localhost:11434", &[q.to_string()])).ok().and_then(|mut v| v.pop())
+                } else { None };
+                let t = std::time::Instant::now();
+                let hits = rank(&ix, q, qv.as_deref(), 10);
+                ms += t.elapsed().as_secs_f32() * 1000.0;
+                let pos = hits.iter().position(|h| expect.contains(&rel(&h.file)));
+                if pos == Some(0) { h1 += 1.0; }
+                let top3 = pos.is_some_and(|p| p < 3);
+                if top3 { h3 += 1.0; }
+                if let Some(p) = pos { rr += 1.0 / (p as f32 + 1.0); }
+                let k = by_kind.entry(kind.clone()).or_default();
+                k.0 += top3 as u8 as f32; k.1 += 1.0;
+                let got = hits.first().map(|h| rel(&h.file)).unwrap_or_default();
+                println!("{:>3} | {:<10} | {} {}", pos.map(|p| (p + 1).to_string()).unwrap_or("-".into()), kind, q,
+                    if pos == Some(0) { String::new() } else { format!("  (1위: {got})") });
+            }
+            let n = cases.len() as f32;
+            println!("-- {name}: hit@1 {:.2} · hit@3 {:.2} · MRR@10 {:.3} · 검색 평균 {:.1} ms (n={})", h1 / n, h3 / n, rr / n, ms / n, cases.len());
+            for (k, (s, c)) in by_kind { println!("   {k}: hit@3 {:.2} ({}개)", s / c, c as usize); }
+        }
+    }
 }
