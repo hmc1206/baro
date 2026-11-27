@@ -186,6 +186,13 @@ async fn files(q: String) -> Vec<String> {
     tauri::async_runtime::spawn_blocking(move || system::find_files(&q, 6)).await.unwrap_or_default()
 }
 
+// 파일 찾기 화면 오른쪽 미리보기
+#[tauri::command]
+async fn file_preview(path: String, app: AppHandle) -> Result<system::FilePreview, String> {
+    let tmp = app.path().app_cache_dir().unwrap_or_else(|_| std::env::temp_dir().join("baro"));
+    tauri::async_runtime::spawn_blocking(move || system::file_preview(&path, &tmp)).await.map_err(|e| e.to_string())?
+}
+
 // 파일 찾기 화면, 검색어 없을 때: 최근 바뀐 파일. 화면에는 종류별로 몇 개씩만 보이니 노트가 많아도 다른 종류가 밀려나지 않게 넉넉히
 #[tauri::command]
 async fn files_recent() -> Vec<String> {
@@ -583,7 +590,7 @@ fn main() {
             let app = w.app_handle();
             if *app.state::<AppState>().suspended.lock().unwrap_or_else(std::sync::PoisonError::into_inner) { register_hotkeys(app); }
         })
-        .invoke_handler(tauri::generate_handler![log_error, search, apps, icon, launch, open_path, reveal, files_wide, files_recent, open_url, hide,
+        .invoke_handler(tauri::generate_handler![log_error, search, apps, icon, launch, open_path, reveal, files_wide, files_recent, file_preview, open_url, hide,
             files, get_config, open_config, system_cmd, paste, window_layout, cmd_ai::ask_ai, cmd_ai::ask_notes, cmd_ai::notes_embed_build, cmd_ai::save_ai,
             permissions, open_settings, ext_list, ext_run, store_list, store_install, store_uninstall,
             get_hotkeys, set_hotkey, suspend_hotkeys,

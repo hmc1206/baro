@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { shortDir } from "./app/filekinds";
 import { NoteSearch, KIND_LABELS } from "./notes";
 
 // confirm이 있으면 Enter를 한 번 더 눌러야 실행 (되돌릴 수 없는 동작)
@@ -332,7 +333,7 @@ export async function recentFileItems(): Promise<Item[]> {
 function fileItem(p0: string, wide: boolean): Item {
   const p = p0.normalize("NFC");
   const name = p.split("/").pop() ?? p;
-  const dir = p.slice(0, p.length - name.length - 1).replace(/^\/Users\/[^/]+/, "~");
+  const dir = wide ? shortDir(p) : p.slice(0, p.length - name.length - 1).replace(/^\/Users\/[^/]+/, "~");
   const open: Action = { title: "열기", run: () => invoke("open_path", { path: p0 }) };
   // 파일 찾기 화면 ⌘O: Obsidian에서 열기 (Vault 밖 파일이면 Obsidian이 알려 줌)
   const obsidian: Action = { title: "Obsidian에서 열기", shortcut: "⌘O", run: () => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(p0)}` }) };

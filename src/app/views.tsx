@@ -8,6 +8,8 @@ import { fmtKey } from "./keys";
 import type { Ai, Draft, PwDraft, Clip, Shot, DocEd } from "./types";
 import { serializeDoc, tagsOf, withTags, type DocFields, type Prop } from "./docfields";
 import { clipDay, clipTime } from "./memo";
+import { marked } from "marked";
+import { fmtSize } from "./filekinds";
 
 export function Icon({ it }: { it: Item }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -263,6 +265,31 @@ export function ClipPreview({ clip, fallback }: { clip?: Clip; fallback?: string
         <pre>{clip.text}</pre>
         <p className="clip-meta">{clipDay(clip.at)} {clipTime(clip.at)}{clip.app && ` · ${clip.app}`} · {clip.text.length.toLocaleString()}자</p>
       </> : <p className="clip-meta">{fallback}</p>}
+    </article>
+  );
+}
+
+// 파일 찾기: 오른쪽에 고른 파일 내용 (글은 그대로, 마크다운은 꾸며서, 이미지·PDF·영상은 Quick Look 썸네일, 폴더는 안의 이름)
+export type FilePrev = { kind: "text" | "image" | "dir" | "none"; text: string; image: string; size: number; modified: number; truncated: boolean };
+export function FilePreviewPane({ path, prev, loading }: { path?: string; prev?: FilePrev | null; loading: boolean }) {
+  if (!path) return <article className="preview file-view"><p className="clip-meta">파일을 고르면 내용이 여기에 보여요.</p></article>;
+  const name = path.split("/").pop()!;
+  const md = /\.(md|markdown)$/i.test(name);
+  const when = prev?.modified ? new Date(prev.modified * 1000).toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" }) : "";
+  return (
+    <article className="preview file-view" key={path}>
+      <header className="file-head">
+        <h3>{name}</h3>
+        <p className="file-path">{path.replace(/^\/Users\/[^/]+/, "~")}</p>
+        {prev && <p className="file-meta">{prev.kind === "dir" ? "폴더" : fmtSize(prev.size)}{when && ` · ${when} 수정`}</p>}
+      </header>
+      {loading && !prev ? <p className="clip-meta">불러오는 중…</p>
+      : !prev ? <p className="clip-meta">읽지 못했어요.</p>
+      : prev.kind === "image" ? <img className="file-thumb" src={prev.image} alt="" />
+      : prev.kind === "text" && md ? <div className="md" dangerouslySetInnerHTML={{ __html: marked.parse(prev.text.replace(/^---\n[\s\S]*?\n---\n/, ""), { async: false }) as string }} />
+      : prev.kind === "text" || prev.kind === "dir" ? <pre className="file-text">{prev.text || "(빈 파일)"}</pre>
+      : <p className="clip-meta">미리보기를 만들 수 없는 파일이에요. Enter로 Finder에서 보기, ⌘K로 열기.</p>}
+      {prev?.truncated && <p className="clip-meta">앞부분만 보여요. 전체는 열어서 보세요.</p>}
     </article>
   );
 }

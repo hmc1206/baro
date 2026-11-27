@@ -159,3 +159,55 @@ fn mdfind_name(q: &str, roots: &[std::path::PathBuf], n: usize) -> Vec<String> {
     out.truncate(n);
     out
 }
+
+// 파일 찾기 화면 오른쪽 미리보기. 글 파일은 앞부분 글자, 그 밖(이미지·PDF·영상·문서)은 Quick Look 썸네일, 폴더는 안의 이름들
+#[derive(serde::Serialize)]
+pub struct FilePreview { pub kind: &'static str, pub text: String, pub image: String, pub size: u64, pub modified: u64, pub truncated: bool }
+
+const TEXT_MAX: usize = 64 * 1024;
+
+pub fn file_preview(path: &str, tmp: &std::path::Path) -> Result<FilePreview, String> {
+    use base64::Engine;
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let modified = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+    let mut p = FilePreview { kind: "none", text: String::new(), image: String::new(), size: meta.len(), modified, truncated: false };
+    if meta.is_dir() {
+        let mut names: Vec<String> = std::fs::read_dir(path).map_err(|e| e.to_string())?.flatten()
+            .map(|e| { let n = e.file_name().to_string_lossy().to_string(); if e.path().is_dir() { n + "/" } else { n } })
+            .filter(|n| !n.starts_with('.')).collect();
+        names.sort();
+        p.truncated = names.len() > 300;
+        names.truncate(300);
+        p.kind = "dir";
+        p.text = names.join("\n");
+        return Ok(p);
+    }
+    // 앞 64KB에 NUL이 없고 UTF-8이면 글 파일 (끝에서 잘린 글자는 버림)
+    let mut buf = vec![0u8; TEXT_MAX.min(meta.len() as usize)];
+    if let Ok(mut f) = std::fs::File::open(path) {
+        use std::io::Read;
+        let n = f.read(&mut buf).unwrap_or(0);
+        buf.truncate(n);
+    }
+    if !buf.is_empty() && !buf.contains(&0) {
+        let s = match std::str::from_utf8(&buf) { Ok(s) => Some(s), Err(e) if e.error_len().is_none() => std::str::from_utf8(&buf[..e.valid_up_to()]).ok(), _ => None };
+        if let Some(s) = s {
+            p.kind = "text";
+            p.text = s.to_string();
+            p.truncated = meta.len() as usize > buf.len();
+            return Ok(p);
+        }
+    }
+    // Quick Look 썸네일 (파일마다 임시 폴더를 따로 써서 동시에 불려도 섞이지 않게)
+    let out = tmp.join(format!("ql-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let _ = Command::new("qlmanage").args(["-t", "-s", "900", "-o"]).arg(&out).arg(path)
+        .stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let png = std::fs::read_dir(&out).ok().and_then(|rd| rd.flatten().map(|e| e.path()).find(|f| f.extension().is_some_and(|x| x == "png")));
+    if let Some(bytes) = png.and_then(|f| std::fs::read(f).ok()) {
+        p.kind = "image";
+        p.image = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes));
+    }
+    let _ = std::fs::remove_dir_all(&out);
+    Ok(p)
+}

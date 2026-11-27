@@ -18,7 +18,7 @@ import { useStudy, studyItem } from "./app/useStudy";
 import { clipDay, clipTime, now } from "./app/memo";
 import { parseDoc, serializeDoc, titleOf, type DocFields } from "./app/docfields";
 import { groupByKind } from "./app/filekinds";
-import { ItemList, ResultView, AiView, PwForm, SearchForm, MissingLinks, LinksPanel, MemoSide, ClipPreview, ActionMenu, Footer, DocEditor } from "./app/views";
+import { ItemList, ResultView, AiView, PwForm, SearchForm, MissingLinks, LinksPanel, MemoSide, ClipPreview, FilePreviewPane, type FilePrev, ActionMenu, Footer, DocEditor } from "./app/views";
 
 export default function App() {
   const [q, setQ] = useState("");
@@ -27,6 +27,8 @@ export default function App() {
   const [files, setFiles] = useState<Item[]>([]);
   const [found, setFound] = useState<{ items: Item[]; loading: boolean }>({ items: [], loading: false }); // 파일 찾기 화면 결과
   const [feature, setFeature] = useState<Feature>("window"); // 기능 목록 화면에서 보는 기능
+  const [filePrev, setFilePrev] = useState<{ path: string; prev: FilePrev | null; loading: boolean } | null>(null); // 파일 찾기 오른쪽 미리보기
+  const prevCache = useRef(new Map<string, FilePrev>());
   const [fileOpen, setFileOpen] = useState<string | null>(null); // 파일 찾기 화면에서 한 종류만 펼쳐 보는 중
   const [appRows, setAppRows] = useState<Item[]>([]); // 앱 실행 화면 결과
   const [hint, setHint] = useState(""); // 처음 화면 기능을 고르면 입력창에 흐리게 보이는 예시
@@ -536,6 +538,20 @@ export default function App() {
     return () => { live = false; clearTimeout(t); };
   }, [q, mode]);
 
+  // 파일 찾기: 고른 파일 내용 불러오기 (방향키로 빨리 지나가면 건너뛰고, 본 파일은 기억)
+  const curPath = mode === "files" ? items[sel]?.path : undefined;
+  useEffect(() => {
+    if (!curPath) return;
+    const hit = prevCache.current.get(curPath);
+    if (hit) { setFilePrev({ path: curPath, prev: hit, loading: false }); return; }
+    setFilePrev({ path: curPath, prev: null, loading: true });
+    let live = true;
+    const t = setTimeout(() => invoke<FilePrev>("file_preview", { path: curPath })
+      .then(p => { if (prevCache.current.size > 60) prevCache.current.clear(); prevCache.current.set(curPath, p); return p; }, () => null)
+      .then(p => { if (live) setFilePrev({ path: curPath, prev: p, loading: false }); }), 120);
+    return () => { live = false; clearTimeout(t); };
+  }, [curPath]);
+
   // 선택 항목이 보이도록 스크롤
   useEffect(() => { list.current?.querySelectorAll("[role=option]")[sel]?.scrollIntoView({ block: "nearest" }); }, [sel, mode]);
 
@@ -801,6 +817,9 @@ export default function App() {
       ) : mode === "memo" ? (
         // 빠른 메모: 왼쪽 저장할 곳 + 오른쪽 이미 적은 기록 (고른 칸 강조)
         <div className="split">{listEl}<MemoSide shot={memo.shot} recRef={recRef} html={memoHtml} onRecClick={onRecClick} /></div>
+      ) : mode === "files" ? (
+        // 파일 찾기: 왼쪽 목록 + 오른쪽 고른 파일 내용
+        <div className="split files-split">{listEl}<FilePreviewPane path={cur?.path} prev={filePrev?.path === cur?.path ? filePrev?.prev : undefined} loading={!!filePrev?.loading} /></div>
       ) : mode === "clip" ? (
         // 클립보드 기록: 왼쪽 목록 + 오른쪽 전체 내용
         <div className="split">{listEl}<ClipPreview clip={curClip} fallback={cur?.subtitle} /></div>

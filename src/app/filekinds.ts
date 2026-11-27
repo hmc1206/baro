@@ -32,3 +32,14 @@ export function groupByKind<T extends { path?: string; section?: string }>(
     return g.length > per ? [...shown, { ...more(k, g.length - per), section: label }] : shown;
   });
 }
+
+// 목록에 보일 짧은 위치: 홈은 ~, 외장 디스크는 디스크 이름부터, 깊으면 마지막 두 폴더만 (…/a/b)
+export function shortDir(path: string): string {
+  const dir = path.slice(0, path.lastIndexOf("/")).replace(/^\/Users\/[^/]+/, "~").replace(/^\/Volumes\//, "");
+  const parts = dir.split("/").filter(Boolean);
+  return parts.length > 3 ? `${parts[0]} › … › ${parts.slice(-2).join(" › ")}` : parts.join(" › ") || "/";
+}
+
+export function fmtSize(n: number): string {
+  return n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n / 1024).toFixed(0)} KB` : n < 1024 ** 3 ? `${(n / 1024 ** 2).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(1)} GB`;
+}

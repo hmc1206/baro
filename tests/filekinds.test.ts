@@ -20,3 +20,10 @@ test("종류 순서대로 묶고 구역마다 개수 제한 + 더 보기, 펼치
   assert.deepEqual(g.map(x => x.section), ["문서 3개", "문서 3개", "문서 3개", "이미지 1개", "압축·설치 1개"]);
   assert.deepEqual(groupByKind(items, 2, "문서", more).map(x => x.title), ["a.md", "b.md", "c.md"]);
 });
+
+test("목록에 보일 짧은 위치", async () => {
+  const { shortDir, fmtSize } = await import("../src/app/filekinds.ts");
+  assert.equal(shortDir("/Users/me/Downloads/a.pdf"), "~ › Downloads");
+  assert.equal(shortDir("/Volumes/Disk/MyBrain/02_Knowledge/Curriculum/Frontend/x.md"), "Disk › … › Curriculum › Frontend");
+  assert.equal(fmtSize(2048), "2 KB");
+});
