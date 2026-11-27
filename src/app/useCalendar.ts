@@ -1,6 +1,7 @@
 // 캘린더·할 일 화면: 노션 계정 여러 개의 일정 DB를 합쳐 날짜별로, 입력하면 할 일 추가
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import type { Item } from "../commands";
 import { type CalDb, type CalEvent, type Pick, type Todo, applyPick, dayLabel, monthCells, notionRange, parseTodo, sectionOf, shiftMonth, shiftYmd, timeOf, visibleEvents, whenLabel, ymd } from "./calendar";
 
@@ -57,7 +58,10 @@ export function useCalendar({ q, setQ }: { q: string; setQ: (q: string) => void 
     const start = [shiftYmd(today, -BACK), cells[0]].sort()[0];
     const end = [shiftYmd(today, AHEAD), cells[cells.length - 1]].sort()[1];
     return invoke<{ events: CalEvent[]; dbs: CalDb[]; errors: string[] }>("notion_events", { start, end, fresh })
-      .then(d => { if (my === seq.current) setCal({ ...d, loading: false, error: null, msg }); })
+      .then(d => {
+        if (fresh) emit("cal-changed").catch(() => {}); // 추가·수정·삭제 뒤: 바탕화면도 새로고침 (노션 캐시를 비운 뒤라 새 값)
+        if (my === seq.current) setCal({ ...d, loading: false, error: null, msg });
+      })
       .catch(e => my === seq.current && setCal({ ...EMPTY, error: String(e) === "NO_ACCOUNT" ? NO_ACCOUNT : String(e) }));
   };
 

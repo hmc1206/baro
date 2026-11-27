@@ -5,7 +5,7 @@ import { marked } from "marked";
 import {
   query, fileItems, recentFileItems, featureItems, FEATURE_TITLES, storeItems, homeItems, aiItem, notesAiItem, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry, Feature,
-  appList,
+  appList, saveTodo,
 } from "./commands";
 import { loadDocs, rank, byCategory, byStage, nextUp, conceptHits, studyCard, Doc, NoteSearch, KIND_LABELS } from "./notes";
 import { NoteGraph, linkInfo } from "./graph";
@@ -146,7 +146,7 @@ export default function App() {
     .then(([list, enabled]) => setClips({ list, enabled })).catch(() => {});
   const openClip = () => { enter("clip"); loadClips(); };
   const { cal, redate, cancelRedate, draft: calDraft, setPick: setCalPick, target: calTarget, setTarget: setCalTarget, pickDay, month, moveMonth, loadCal, calItems } = useCalendar({ q, setQ });
-  const openCal = () => { enter("cal"); cancelRedate(); loadCal(); };
+  const openCal = (text = "") => { enter("cal"); cancelRedate(); loadCal(); if (text) setQ(text); };
   // 클립보드 기록 목록: 검색어가 있으면 글 안에서 찾기. 맨 끝에 기록 끄기·모두 지우기
   const clipItems = (): Item[] => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -733,6 +733,8 @@ export default function App() {
     if (keyForms(e)) return;
     if (document.activeElement !== input.current && !(view || ai)) input.current?.focus();
     if (mode === "cal" && e.metaKey && (e.code === "BracketLeft" || e.code === "BracketRight")) { e.preventDefault(); moveMonth(e.code === "BracketLeft" ? -1 : 1); return; }
+    // 홈: 입력한 글을 바로 노션 할 일로 ("내일 3시 회의" ⌘T)
+    if (mode === null && !view && e.metaKey && e.code === "KeyT" && q.trim()) { e.preventDefault(); saveTodo(q.trim(), ui).catch(fail); return; }
     if (keyGlobal(e) || keyView(e) || keyMemo(e) || keyAi(e) || keyNotes(e) || keyShortcut(e)) return;
     keyList(e);
   };

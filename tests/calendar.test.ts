@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseTodo, notionStart, sectionOf, visibleEvents, monthCells, shiftMonth, eventsOn, notionRange, whenLabel, applyPick, quickStarts, quickEnds, weekBars, type CalEvent } from "../src/app/calendar.ts";
+import { parseTodo, notionStart, sectionOf, visibleEvents, monthCells, shiftMonth, eventsOn, notionRange, whenLabel, applyPick, quickStarts, quickEnds, weekBars, todoOn, dayList, type CalEvent } from "../src/app/calendar.ts";
 
 const now = new Date(2026, 10, 27, 10, 0); // 2026-11-27 금요일
 
@@ -114,4 +114,18 @@ test("multi-day events become one bar per week", () => {
   assert.deepEqual([pick("2026-11-28").s, pick("2026-11-28").e, pick("2026-11-28").cutEnd, pick("2026-11-28").lane], [6, 6, true, 1]);
   assert.deepEqual(hidden, [0, 0, 0, 0, 0, 0, 0]);
   assert.deepEqual(weekBars(list, week, 1).hidden, [0, 0, 0, 0, 0, 1, 1]);
+});
+
+test("todoOn uses the picked day only when the text has no date", () => {
+  assert.equal(todoOn("장보기", "2026-12-01", now).date, "2026-12-01");
+  assert.equal(todoOn("내일 장보기", "2026-12-01", now).date, "2026-11-28");
+  assert.deepEqual(todoOn("3시 회의", "2026-12-01", now), { title: "회의", date: "2026-11-27", time: "15:00", end: null });
+});
+test("dayList puts overdue and undone first", () => {
+  const ev = (id: string, start: string, done: boolean | null, end: string | null = null): CalEvent =>
+    ({ id, title: id, start, end, done, url: "", account: "", color: "", db: "", db_id: "" });
+  const list = [ev("done", "2026-11-27T09:00", true), ev("late", "2026-11-25", false), ev("lateDone", "2026-11-24", true),
+    ev("pm", "2026-11-27T15:00", false), ev("span", "2026-11-26", false, "2026-11-28"), ev("tmr", "2026-11-28", false)];
+  assert.deepEqual(dayList(list, "2026-11-27", "2026-11-27").map(e => e.id), ["late", "span", "pm", "done"]);
+  assert.deepEqual(dayList(list, "2026-11-28", "2026-11-27").map(e => e.id), ["span", "tmr"]);
 });

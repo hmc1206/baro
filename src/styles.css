@@ -339,3 +339,105 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .month-cell.in-range { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
 .month-cell.range-edge .month-day { outline: 1.5px solid var(--accent); }
 .datebar-time.empty { opacity: .45; }
+
+/* ── 바탕화면 모드 ("desktop" 창): 바탕화면 그림 위에 어두운 유리 카드. 시스템 밝기와 상관없이 어두운 톤 ── */
+:root.desk { --text:#F2F1EE; --muted:rgba(242,241,238,.62); --line:rgba(255,255,255,.12); --surface:rgba(30,30,34,.92); --field:rgba(255,255,255,.06);
+  --pop:rgba(26,27,30,.97); --danger:#F2555A; --accent-text:var(--accent); color-scheme: dark; }
+.dk { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; gap: 22px; padding-left: 28px; padding-right: 28px;
+  background: linear-gradient(to bottom, rgba(8,8,10,.42), rgba(8,8,10,.08) 26%, rgba(8,8,10,.08) 68%, rgba(8,8,10,.46)); }
+.dk-glass { background: rgba(20,20,23,.58); border: 1px solid rgba(255,255,255,.10); border-radius: 18px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.06); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.dk button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.dk-top { width: min(1240px, 100%); display: flex; align-items: center; gap: 16px; padding: 10px 12px 10px 10px; }
+.dk-days { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.dk-day { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 0 6px; border-radius: 12px; transition: background-color .15s; }
+.dk-day:hover { background: rgba(255,255,255,.06); }
+.dk-day.on { background: var(--accent); color: var(--accent-ink); }
+.dk-wd { font-size: 11px; opacity: .7; } .dk-day.sun .dk-wd { color: #FF8A80; } .dk-day.sat .dk-wd { color: #8AB4FF; }
+.dk-day.on .dk-wd { color: inherit; }
+.dk-dn { font-size: 17px; font-weight: 650; letter-spacing: -.02em; }
+.dk-dots { display: flex; gap: 3px; height: 4px; } .dk-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }
+.dk-day.on .dk-dots i { background: var(--accent-ink); }
+.dk-side { display: flex; align-items: center; gap: 14px; }
+.dk-badge { padding: 6px 10px; border-radius: 10px; font-size: 12px; background: rgba(242,85,90,.18); color: #FFB4B6; }
+.dk-clock { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; padding-right: 6px; }
+.dk-clock b { font-size: 26px; font-weight: 650; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.dk-clock span { font-size: 11px; color: var(--muted); }
+.dk-center { flex: 1; min-height: 0; width: min(920px, 100%); display: flex; align-items: center; }
+.dk-card { width: 100%; max-height: 100%; display: flex; flex-direction: column; gap: 14px; padding: 18px 22px 18px; overflow: hidden; }
+.dk-card-head { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.dk-chip { padding: 4px 10px; border-radius: 8px; background: rgba(255,255,255,.08); color: var(--text); font-weight: 600; }
+.dk-chip em { font-style: normal; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.dk-count { flex: 1; }
+.dk-nav { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.dk-nav button { width: 26px; height: 26px; border-radius: 8px; background: rgba(255,255,255,.07); font-size: 16px; line-height: 1; }
+.dk-nav button:hover { background: rgba(255,255,255,.14); }
+.dk-hero { display: flex; flex-direction: column; gap: 8px; padding: 6px 2px 4px; }
+.dk-when { font-size: 13px; color: var(--accent); font-weight: 600; }
+.dk-hero h1 { font-size: 40px; line-height: 1.12; font-weight: 700; letter-spacing: -.03em; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dk-hero h1.done { text-decoration: line-through; opacity: .5; }
+.dk-meta { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+.dk-meta i, .dk-list li > i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dk-acts { display: flex; gap: 8px; margin-top: 6px; }
+.dk-btn { padding: 8px 14px; border-radius: 10px; background: rgba(255,255,255,.08); font-size: 13px; font-weight: 550; }
+.dk-btn:hover { background: rgba(255,255,255,.14); }
+.dk-btn.primary { background: var(--accent); color: var(--accent-ink); } .dk-btn.primary:hover { filter: brightness(1.06); }
+.dk-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 0; max-height: 34vh;
+  border-top: 1px solid var(--line); padding-top: 8px; }
+.dk-list li { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; font-size: 14px; }
+.dk-list li:hover { background: rgba(255,255,255,.05); }
+.dk-list li.on { background: rgba(255,255,255,.09); box-shadow: inset 3px 0 0 var(--accent); }
+.dk-list li.done .dk-lt { text-decoration: line-through; opacity: .5; }
+.dk-check { width: 18px; height: 18px; flex: none; border-radius: 6px; border: 1.5px solid rgba(255,255,255,.35) !important; font-size: 11px; line-height: 1; color: var(--accent-ink) !important; }
+.dk-list li.done .dk-check { background: var(--accent); border-color: var(--accent) !important; }
+.dk-check:disabled { opacity: .3; cursor: default; }
+.dk-lt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-lm { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dk-empty { padding: 28px 2px; font-size: 18px; color: var(--muted); }
+.dk-add { font: inherit; font-size: 14px; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line); background: rgba(0,0,0,.25);
+  color: var(--text); outline: none; caret-color: var(--accent); }
+.dk-add:focus { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
+.dk-add::placeholder { color: var(--muted); }
+.dk-dock { display: flex; align-items: center; gap: 4px; padding: 7px; border-radius: 20px; }
+.dk-dock button { position: relative; width: 46px; height: 46px; display: grid; place-items: center; border-radius: 13px; transition: background-color .15s, transform .15s; }
+.dk-dock button:hover { background: rgba(255,255,255,.10); transform: translateY(-2px); }
+.dk-dock button span { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 11px;
+  padding: 4px 8px; border-radius: 7px; background: rgba(20,20,23,.92); opacity: 0; pointer-events: none; transition: opacity .12s; }
+.dk-dock button:hover span { opacity: 1; }
+.dk-sep { width: 1px; height: 26px; background: var(--line); margin: 0 4px; }
+.dk-toast { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); padding: 9px 14px; font-size: 13px; border-radius: 12px; }
+@media (max-height: 760px) { .dk-hero h1 { font-size: 30px; } .dk-list { max-height: 26vh; } }
+
+/* 바탕화면 패널: 끌어서 옮기고 크기 바꾸는 유리 카드. 고정하면 테두리에 강조색 */
+.dk-panel { position: fixed; display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; animation: dk-in .14s ease-out; }
+.dk-panel.pinned { border-color: color-mix(in srgb, var(--accent) 45%, rgba(255,255,255,.1)); }
+@keyframes dk-in { from { opacity: 0; transform: translateY(6px) scale(.99); } }
+.dk-ph { display: flex; align-items: center; gap: 8px; padding: 9px 8px 8px 14px; cursor: grab; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--line); flex: none; }
+.dk-ph:active { cursor: grabbing; }
+.dk-pt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-ph button { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.dk-ph button:hover { background: rgba(255,255,255,.1); color: var(--text); }
+.dk-ph button.on { color: var(--accent); }
+.dk-pb { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+.dk-pb .month { padding: 0; min-height: 0; }
+.dk-grip { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 55%, rgba(255,255,255,.28) 55% 62%, transparent 62% 72%, rgba(255,255,255,.28) 72% 79%, transparent 79%); }
+.dk-pin { font: inherit; font-size: 13px; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,.25); color: var(--text); outline: none; min-width: 0; flex: 1; }
+.dk-pin:focus { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
+.dk-pin::placeholder { color: var(--muted); }
+.dk-plist { list-style: none; padding: 0; flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.dk-plist li { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 9px; font-size: 13px; cursor: pointer; }
+.dk-plist li:hover { background: rgba(255,255,255,.07); }
+.dk-plist li.static { cursor: default; }
+.dk-plist li button { opacity: 0; width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 11px; }
+.dk-plist li:hover button { opacity: 1; } .dk-plist li button:hover { background: rgba(255,255,255,.12); color: var(--text); }
+.dk-ptext { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-plist.memo .dk-ptext { white-space: normal; overflow-wrap: anywhere; }
+.dk-pmeta { font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dk-pnone { color: var(--muted); cursor: default !important; } .dk-pnone:hover { background: none !important; }
+.dk-prow { display: flex; gap: 6px; }
+.dk-pb > .dk-pin { flex: none; }
+.dk-dock button.on { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+.dk-pinned { position: absolute; bottom: 4px; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--accent); }
+.dk-top, .dk-dock { position: relative; z-index: 50; } .dk-toast { z-index: 60; }

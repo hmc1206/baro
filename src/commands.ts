@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { shortDir } from "./app/filekinds";
 import { NoteSearch, KIND_LABELS } from "./notes";
+import { type CalDb, notionRange, parseTodo, todoOn, whenLabel } from "./app/calendar";
+import { emit } from "@tauri-apps/api/event";
 
 // confirm이 있으면 Enter를 한 번 더 눌러야 실행 (되돌릴 수 없는 동작)
 // keep: 실행 후 입력창을 비우지 않음 (예시 입력, AI 질문 등)
@@ -21,7 +23,7 @@ export type StoreEntry = { id: string; name: string; description: string; versio
 // 목록 밖의 화면: 텍스트 결과, 권한 안내
 export type View = { kind: "text"; title: string; text: string; error?: boolean } | { kind: "perm"; perm: string };
 // 화면(App)이 넘겨주는 동작들
-export type Ui = { ask: (q: string) => void; askNotes: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openClip: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void; openApps: () => void; setHint: (hint: string) => void; openFeature: (f: Feature) => void; openCal: () => void };
+export type Ui = { ask: (q: string) => void; askNotes: (q: string) => void; show: (v: View) => void; openStore: () => void; openNotes: (id: string, graph?: boolean) => void; openGraph: () => void; openFiles: () => void; openMemo: () => void; openClip: () => void; openNoteManager: () => void; openHotkeys: () => void; togglePin: () => void; setQuery: (q: string) => void; openApps: () => void; setHint: (hint: string) => void; openFeature: (f: Feature) => void; openCal: (q?: string) => void };
 
 const isMac = navigator.userAgent.includes("Mac");
 let config: Config = { ai_ready: false, ai_model: "", quicklinks: [], snippets: [], store_ready: false, note_searches: [], error: null };
@@ -29,6 +31,7 @@ export const getConfig = () => config;
 let exts: Manifest[] = [];
 export async function loadConfig() {
   try { config = await invoke<Config>("get_config"); } catch { /* 이전 설정 유지 */ }
+  if (config.notion_accounts) notionDbs().catch(() => {}); // ⌘T 할 일 저장 전에 노션 DB 목록 미리
   try { exts = await invoke<Manifest[]>("ext_list"); } catch { exts = []; }
   return config;
 }
@@ -103,6 +106,8 @@ const COMMANDS: Cmd[] = [
   { id: "b-pin", title: "창 고정·해제", keys: "pin float always on top 고정 항상 위", glyph: "pin", run: async ui => ui.togglePin() },
   { id: "b-files", title: "파일 찾기 (Finder)", keys: "files finder find 파일 찾기 위치 폴더", glyph: "file", run: async ui => ui.openFiles() },
   { id: "b-memo", title: "빠른 메모", keys: "memo note 메모 기록 적기 daily 데일리 공부 기록", glyph: "memo", run: async ui => ui.openMemo() },
+  { id: "b-desktop", title: "바탕화면 모드 켜기·끄기", keys: "desktop 바탕화면 배경 홈 위젯 home", glyph: "max",
+    run: async () => { const on = await invoke<boolean>("desktop_state"); await invoke("desktop_set", { on: !on }); } },
   { id: "b-cal", title: "캘린더 · 할 일", keys: "calendar todo 캘린더 할일 일정 노션 notion", glyph: "daily", run: async ui => ui.openCal() },
   { id: "b-clip", title: "클립보드 기록", keys: "clipboard history 클립보드 기록 복사 붙여넣기 paste", glyph: "clip", run: async ui => ui.openClip() },
   { id: "b-expand", title: "스니펫 자동 입력 켜기·끄기", keys: "snippet expand text expansion 스니펫 자동 입력 확장 치환 세미콜론", glyph: "snippet",
@@ -161,6 +166,33 @@ function snippets(q: string, all = false): Item[] {
         { title: "앞 앱에 붙여넣기", run: () => pasteText(text()) },
       ] };
   });
+}
+
+// 홈 입력칸에 아무 글이나 치고 ⌘T: 캘린더 화면을 열지 않고 바로 노션 할 일로 저장 ("내일 3시 회의")
+// 저장할 DB = 캘린더 화면과 같은 기본 DB (완료 칸 있는 DB 먼저, 설정의 계정 순서)
+// 노션 DB 목록: 첫 조회가 1~2초라 앱을 열 때 미리 불러 두고 5분 동안 재사용
+let dbs: { at: number; p: Promise<CalDb[]> } | null = null;
+function notionDbs() {
+  if (!dbs || Date.now() - dbs.at > 300_000) {
+    dbs = { at: Date.now(), p: invoke<CalDb[]>("notion_dbs").then(v => v.sort((a, b) => Number(!!b.done_prop) - Number(!!a.done_prop)))
+      .catch(e => { dbs = null; throw e; }) };
+  }
+  return dbs.p;
+}
+// 할 일 하나를 기본 DB에 저장. day: 바탕화면에서 고른 날 (글에 날짜가 없을 때 그 날로)
+export async function addTodo(text: string, day?: string): Promise<string> {
+  const t = day ? todoOn(text, day, new Date()) : parseTodo(text, new Date());
+  if (!t.title) throw new Error("할 일 제목을 입력해 주세요");
+  const db = (await notionDbs())[0];
+  if (!db) throw new Error("노션 일정 DB가 없어요 · 통합을 DB에 연결해 주세요");
+  await invoke("notion_create", { dbId: db.id, title: t.title, ...notionRange(t, new Date().getTimezoneOffset()) });
+  emit("cal-changed").catch(() => {}); // 바탕화면이 바로 새로고침
+  return `✓ 노션에 추가: ${t.title} (${whenLabel(t)} · ${db.account} · ${db.name})`;
+}
+export async function saveTodo(text: string, ui: Ui) {
+  if (!config.notion_accounts) { ui.openCal(); return; } // 계정 연결 안내는 캘린더 화면에서
+  ui.setHint(`노션에 저장 중… ${text}`);
+  try { ui.setHint(await addTodo(text)); } catch (e) { ui.setHint(String(e).replace(/^Error: /, "")); }
 }
 
 type Scored = { s: number; item: Item };
@@ -245,7 +277,7 @@ export function homeItems(ui: Ui): Item[] {
     go("apps", "app", "app", "앱 실행", "설치된 앱 전체 보기 · 이름으로 좁히기", "열기", async () => ui.openApps(), true),
     go("files", "file", "cmd", "파일 찾기", "홈 · 외장 디스크에서 이름으로 찾고 Finder로 위치 보기", "열기", async () => ui.openFiles(), true),
     go("memo", "memo", "cmd", "빠른 메모", "오늘 Daily나 공부 중인 단계의 내 기록에 한 줄 적기", "열기", async () => ui.openMemo(), true),
-    go("cal", "daily", "cmd", "캘린더 · 할 일", config.notion_accounts ? `노션 계정 ${config.notion_accounts}개 일정 합쳐 보기 · 입력해서 할 일 추가` : "노션 계정을 연결해 일정 합쳐 보기 · 할 일 추가", "열기", async () => ui.openCal(), true),
+    go("cal", "daily", "cmd", "캘린더 · 할 일", config.notion_accounts ? `노션 계정 ${config.notion_accounts}개 일정 합쳐 보기 · 홈에서 글 치고 ⌘T면 바로 할 일 추가` : "노션 계정을 연결해 일정 합쳐 보기 · 할 일 추가", "열기", async () => ui.openCal(), true),
     go("clip", "clip", "cmd", "클립보드 기록", "복사했던 글을 다시 찾아 붙여넣기", "열기", async () => ui.openClip(), true),
     ex("calc", "calc", "calc", "계산기", "수식 입력 · 예: 12*3+4", "12*3+4"),
     ex("notesAi", "notesAi", "ai", "내 노트에게 묻기", config.ai_ready ? "질문 입력 후 ⌘↵ · 내 Obsidian 노트에서 찾아 출처와 함께 답해요" : "설정에서 AI 연결 필요", "Tauri에서 링크를 기본 브라우저로 여는 방법"),

@@ -124,6 +124,19 @@ export const shiftMonth = (month: string, n: number) => { const d = fromYmd(mont
 export const eventsOn = (list: CalEvent[], day: string) =>
   list.filter(e => e.start.slice(0, 10) <= day && (e.end ?? e.start).slice(0, 10) >= day);
 
+// 바탕화면에서 고른 날에 추가: 글에 날짜·시간 말이 없으면 그 날로 ("장보기" → 고른 날, "내일 장보기" → 내일)
+export function todoOn(text: string, day: string, now: Date): Todo {
+  const t = parseTodo(text, now);
+  return t.title === text.trim().replace(/\s+/g, " ") ? { ...t, date: day } : t;
+}
+
+// 바탕화면 오늘 카드: 그날 할 일 (오늘이면 밀린 할 일 포함). 안 한 것 먼저, 시작 순
+export function dayList(list: CalEvent[], day: string, today: string): CalEvent[] {
+  const late = day === today ? list.filter(e => (e.end ?? e.start).slice(0, 10) < today && e.done === false) : [];
+  const all = [...late, ...eventsOn(list, day).filter(e => !late.includes(e))];
+  return all.sort((a, b) => Number(!!a.done) - Number(!!b.done) || a.start.localeCompare(b.start));
+}
+
 // 노션에 넣을 기간: 끝이 있으면 end. 시작·끝 중 한쪽만 시간이 있으면 맞춤 (노션은 둘 다 날짜 또는 둘 다 시각)
 export function notionRange(t: Todo, offsetMin: number): { start: string; end: string | null } {
   const endTime = t.end ? (t.time ? t.end.time ?? t.time : null) : null;

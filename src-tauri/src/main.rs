@@ -10,6 +10,7 @@ mod extensions;
 mod indexer;
 mod log;
 mod notion;
+mod desktop;
 mod rag;
 mod search;
 mod shot;
@@ -59,8 +60,24 @@ fn dismiss(app: &AppHandle) {
 // 고정 여부와 상관없이 창 닫기
 fn close(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") { let _ = w.hide(); }
+    // 바탕화면 모드면 앱 전체를 숨기면 바탕화면 창까지 사라지므로, 이전 앱에 포커스만 돌려줌
+    if desktop::is_open(app) {
+        if let Some(b) = app.state::<AppState>().prev_bundle.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() { system::activate(&b); }
+        return;
+    }
     #[cfg(target_os = "macos")]
     let _ = app.hide();
+}
+
+// 바탕화면 모드 켜기·끄기 (켜짐 여부는 앱을 다시 켜도 유지)
+#[tauri::command]
+fn desktop_state(app: AppHandle) -> bool { desktop::is_open(&app) }
+#[tauri::command]
+fn desktop_set(on: bool, app: AppHandle) -> Result<(), String> { desktop::set(&app, &data_dir(&app), on) }
+// 바탕화면의 독에서: 런처를 그 기능 화면으로 띄움
+#[tauri::command]
+fn open_launcher(action: String, app: AppHandle) {
+    if let Some(w) = app.get_webview_window("main") { toggle(&w, &action); }
 }
 
 #[tauri::command]
@@ -224,6 +241,13 @@ async fn notion_events(start: String, end: String, fresh: bool, app: AppHandle) 
     let (dbs, e2) = notion::databases(&accts).await;
     errors.extend(e2);
     Ok(CalData { events, dbs, errors })
+}
+
+// 홈 ⌘T 할 일 저장용: 일정 DB 목록만 (10분 캐시)
+#[tauri::command]
+async fn notion_dbs(app: AppHandle) -> Result<Vec<notion::Db>, String> {
+    let accts = notion_accounts(&app)?;
+    Ok(notion::databases(&accts).await.0)
 }
 
 #[tauri::command]
@@ -526,8 +550,9 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     let open = MenuItem::with_id(app, "open", "Baro 열기", true, None::<&str>)?;
     let logs = MenuItem::with_id(app, "logs", "로그 보기", true, None::<&str>)?;
+    let desk = MenuItem::with_id(app, "desktop", "바탕화면 모드 켜기·끄기", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Baro 종료", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &logs, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &desk, &logs, &PredefinedMenuItem::separator(app)?, &quit])?;
     tauri::tray::TrayIconBuilder::with_id("baro")
         .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
         .icon_as_template(true) // 밝은·어두운 메뉴 막대에 맞춰 색이 바뀜
@@ -536,6 +561,7 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, e| match e.id().as_ref() {
             "open" => if let Some(w) = app.get_webview_window("main") { toggle(&w, "baro"); },
+            "desktop" => { let on = !desktop::is_open(app); if let Err(e) = desktop::set(app, &data_dir(app), on) { log::write(&format!("바탕화면 모드 실패: {e}")); } }
             "logs" => if let Some(p) = log::path() { let _ = open::that_detached(p); },
             "quit" => { log::write("메뉴 막대에서 종료"); app.exit(0); }
             _ => {}
@@ -596,6 +622,8 @@ fn main() {
             if let Ok(c) = config::load(&config_file(&h)) {
                 std::thread::spawn(move || { vault::scan(Path::new(&c.vault_dir)); vault::save(); });
             }
+            // 바탕화면 모드가 켜져 있었으면 바탕화면 창을 다시 깔기
+            if desktop::is_on(&data_dir(&h)) { if let Err(e) = desktop::open(&h) { log::write(&format!("바탕화면 창 실패: {e}")); } }
             clip::start(&data_dir(&h).join("clipboard.json"), config::load(&config_file(&h)).map(|c| c.clipboard_history).unwrap_or(true));
             if let Ok(b) = std::fs::read(usage_file(&h)) {
                 if let Ok(u) = serde_json::from_slice(&b) { *h.state::<AppState>().usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = u; }
@@ -610,7 +638,9 @@ fn main() {
             });
             Ok(())
         })
-        .on_window_event(|w, e| if let WindowEvent::Resized(_) = e {
+        // 창 크기 기억·포커스를 잃으면 숨기기는 런처(main) 창만. 바탕화면 창은 늘 그대로
+        .on_window_event(|w, e| if w.label() != "main" {
+        } else if let WindowEvent::Resized(_) = e {
             let pinned = *w.app_handle().state::<AppState>().pinned.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(win) = w.app_handle().get_webview_window(w.label()) { window::resized(&win, pinned); }
         } else if let WindowEvent::Focused(false) = e {
@@ -641,7 +671,7 @@ fn main() {
             get_hotkeys, set_hotkey, suspend_hotkeys,
             cmd_notes::notes_load, cmd_notes::note_set_field, cmd_notes::note_toggle_task, cmd_notes::note_add_evidence, cmd_notes::note_edit_evidence, cmd_notes::note_stage_status, cmd_notes::note_task_state, cmd_notes::notes_named, cmd_notes::note_add_record, cmd_notes::memo_daily, cmd_notes::memo_daily_read, cmd_notes::memo_daily_path, cmd_notes::shot_latest, cmd_notes::shot_save, cmd_notes::shot_read, cmd_notes::memo_remove, cmd_notes::memo_restore, cmd_notes::memo_replace, cmd_notes::clipboard_text, cmd_notes::note_create, cmd_notes::note_read, cmd_notes::note_write, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, cmd_notes::concept_create, snippet_expand_set, snippet_expand_state,
-            notion_events, notion_create, notion_done, notion_edit, notion_trash])
+            desktop_state, desktop_set, open_launcher, notion_events, notion_dbs, notion_create, notion_done, notion_edit, notion_trash])
         .build(tauri::generate_context!())
         .expect("Baro 실행 실패")
         .run(|app, e| {
