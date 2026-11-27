@@ -102,6 +102,31 @@ fn chunks_of(body: &str) -> Vec<String> {
     parts.into_iter().filter(|p| !p.trim().is_empty()).collect()
 }
 
+// 노트 종류별 가중치 (검색 평가셋으로 정함): 시스템·템플릿 폴더는 많이 낮게, 목차·색인 노트는 낮게, 보관 노트도 낮게
+const SYS_W: f32 = 0.3;
+const MOC_W: f32 = 0.5;
+const ARCHIVE_W: f32 = 0.6;
+fn doc_weight(rel: &Path, front: &str) -> f32 {
+    let dirs: Vec<String> = rel.parent().map(|p| p.components().map(|c| c.as_os_str().to_string_lossy().nfc().collect::<String>().to_lowercase()).collect()).unwrap_or_default();
+    if dirs.iter().any(|d| matches!(d.as_str(), "999_system" | "copilot" | "_system" | "templates") || d.ends_with("템플릿")) { return SYS_W; }
+    let w = if dirs.first().is_some_and(|d| d == "04_archive") { ARCHIVE_W } else { 1.0 };
+    if is_moc(front) { w * MOC_W } else { w }
+}
+
+// 목차·색인 노트: 머리말 type·category에 index·moc·hub(예: linux-index, curriculum-hub), 또는 태그에 index·moc
+fn is_moc(front: &str) -> bool {
+    let mark = |s: &str, words: &[&str]| s.split(['-', '_']).any(|p| words.contains(&p));
+    let clean = |s: &str| s.trim().trim_matches(['"', '\'', '#']).to_string();
+    let mut in_tags = false;
+    front.lines().any(|raw| {
+        let l = raw.trim_end().to_lowercase();
+        if !l.starts_with([' ', '-']) { in_tags = l.starts_with("tags:"); }
+        if let Some(v) = l.strip_prefix("type:").or_else(|| l.strip_prefix("category:")) { return mark(&clean(v), &["index", "moc", "hub"]); }
+        if let Some(v) = l.strip_prefix("tags:") { return v.trim().trim_matches(['[', ']']).split(',').any(|t| matches!(clean(t).as_str(), "index" | "moc")); }
+        in_tags && l.trim_start().starts_with('-') && matches!(clean(l.trim_start().trim_start_matches('-')).as_str(), "index" | "moc")
+    })
+}
+
 // Vault 색인. 노트 목록(경로·수정 시각)이 그대로면 전에 만든 색인을 그대로 씀
 pub fn index(vault: &Path, skip: &[String]) -> std::sync::Arc<Index> {
     let entries: Vec<_> = crate::vault::scan(vault).into_iter().filter(|e| {
@@ -120,7 +145,7 @@ pub fn index(vault: &Path, skip: &[String]) -> std::sync::Arc<Index> {
         let Some((front, body)) = split_front(&e.text) else { continue };
         let p = Path::new(&e.path);
         let title = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let weight = if e.path.contains("/04_Archive/") { 0.6 } else { 1.0 }; // 보관 노트는 낮게
+        let weight = doc_weight(p.strip_prefix(vault).unwrap_or(p), front);
         let head = tokenize(&format!("{} {}", title.replace(['-', '_'], " "), front_terms(front)));
         let d = docs.len();
         docs.push(Doc { file: e.path.clone(), title, weight });
@@ -284,6 +309,21 @@ mod tests {
         assert_eq!(tokenize("ssh-keygen 키 권한변경"), vec!["ssh-keygen", "ssh", "keygen", "키", "권한", "한변", "변경"]);
         assert!(front_terms("command: chmod\nlevel: 1\naliases: [권한 변경]\ntags:\n  - linux\nsource: x").contains("권한 변경"));
         assert!(!front_terms("command: a\nlevel: secret").contains("secret"));
+    }
+
+    #[test]
+    fn system_and_index_notes_weigh_less() {
+        let w = |p: &str, f: &str| doc_weight(Path::new(p), f);
+        assert_eq!(w("02_Knowledge/Linux/01_명령어/chmod.md", "type: linux-command\ntags:\n  - linux"), 1.0);
+        assert_eq!(w("999_System/AI-Instructions.md", ""), SYS_W);
+        assert_eq!(w("02_Knowledge/Curriculum/CS/90_템플릿/T01 커리큘럼 노트.md", "type: concept"), SYS_W);
+        assert_eq!(w("02_Knowledge/Linux/03_주제별_정리/27_전체_명령어_색인.md", "type: linux-index\ncategory: index"), MOC_W);
+        assert_eq!(w("02_Knowledge/Curriculum/Security-Curriculum.md", "type: \"curriculum-hub\""), MOC_W);
+        assert_eq!(w("02_Knowledge/Likelion/멋사-14기.md", "type: index\ntags: [likelion, moc]"), MOC_W);
+        assert_eq!(w("00_Inbox/x.md", "type: idea\ntags:\n  - idea\n  - moc"), MOC_W);
+        assert_eq!(w("02_Knowledge/CS/CS-08-08 해시 인덱스.md", "type: concept\naliases:\n  - index"), 1.0); // 태그 아닌 목록의 index
+        assert_eq!(w("04_Archive/Projects/a.md", ""), ARCHIVE_W);
+        assert_eq!(w("04_Archive/Projects/a-첨부목록.md", "type: index"), ARCHIVE_W * MOC_W);
     }
 
     #[test]
