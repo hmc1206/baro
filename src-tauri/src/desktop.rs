@@ -15,7 +15,7 @@ pub fn is_on(dir: &Path) -> bool {
 }
 
 pub fn set(app: &AppHandle, dir: &Path, on: bool) -> Result<(), String> {
-    let _ = std::fs::create_dir_all(dir);
+    crate::log::warn("데스크톱 설정 폴더 만들기", std::fs::create_dir_all(dir));
     std::fs::write(file(dir), serde_json::json!({ "on": on }).to_string()).map_err(|e| e.to_string())?;
     if on { open(app) } else {
         if let Some(w) = app.get_webview_window(LABEL) { let _ = w.destroy(); }
@@ -51,14 +51,77 @@ pub fn open(app: &AppHandle) -> Result<(), String> {
         .skip_taskbar(true).focused(false).visible(false)
         .build().map_err(|e| e.to_string())?;
     // 주 모니터 전체 (메뉴 막대·Dock 자리는 화면 쪽에서 비워 둠)
-    if let Ok(Some(m)) = w.primary_monitor() {
-        let _ = w.set_position(PhysicalPosition::new(m.position().x, m.position().y));
-        let _ = w.set_size(PhysicalSize::new(m.size().width, m.size().height));
-    }
+    let first = fit(&w);
     pin_to_desktop(&w);
     set_level(&w, -1);
     let _ = w.show();
+    watch_screen(app.clone(), first);
     Ok(())
+}
+
+// 창 영역: 위치 x, y와 크기 w, h (물리 픽셀)
+type Rect = (i32, i32, u32, u32);
+
+// 순수 함수: 모니터의 위치·크기 → 바탕화면 창 영역 (모니터 전체)
+fn rect_for(pos: (i32, i32), size: (u32, u32)) -> Rect { (pos.0, pos.1, size.0, size.1) }
+
+// 순수 함수: 새 영역이 비어 있지 않고 이전과 다를 때만 다시 맞춤
+fn needs_refit(prev: Option<Rect>, now: Option<Rect>) -> bool {
+    matches!(now, Some(r) if r.2 > 0 && r.3 > 0 && prev != now)
+}
+
+fn primary_rect(w: &tauri::WebviewWindow) -> Option<Rect> {
+    let m = w.primary_monitor().ok().flatten()?;
+    Some(rect_for((m.position().x, m.position().y), (m.size().width, m.size().height)))
+}
+
+// 현재 주 모니터에 맞추고 맞춘 영역을 돌려줌
+fn fit(w: &tauri::WebviewWindow) -> Option<Rect> {
+    let r = primary_rect(w)?;
+    let _ = w.set_position(PhysicalPosition::new(r.0, r.1));
+    let _ = w.set_size(PhysicalSize::new(r.2, r.3));
+    Some(r)
+}
+
+// 해상도 변경·모니터 연결/해제·주 모니터 교체를 3초 간격으로 확인해 창을 다시 맞춤 (창이 닫히면 끝)
+// 창 크기가 바뀌면 화면 쪽 resize 이벤트가 패널을 다시 배치함
+fn watch_screen(app: AppHandle, first: Option<Rect>) {
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+    std::thread::spawn(move || {
+        let mut last = first;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let Some(w) = app.get_webview_window(LABEL) else { break };
+            let now = primary_rect(&w);
+            if needs_refit(last, now) { last = fit(&w); }
+        }
+        RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rect_covers_monitor() {
+        assert_eq!(rect_for((0, 0), (2560, 1440)), (0, 0, 2560, 1440));
+        assert_eq!(rect_for((-1920, 0), (1920, 1080)), (-1920, 0, 1920, 1080));
+    }
+    #[test]
+    fn refit_only_on_change() {
+        let a = Some((0, 0, 1920, 1080));
+        assert!(!needs_refit(a, a));
+        assert!(needs_refit(a, Some((0, 0, 2560, 1440))));
+        assert!(needs_refit(a, Some((100, 0, 1920, 1080))));
+        assert!(needs_refit(None, a));
+    }
+    #[test]
+    fn refit_ignores_missing_or_empty() {
+        let a = Some((0, 0, 1920, 1080));
+        assert!(!needs_refit(a, None));
+        assert!(!needs_refit(a, Some((0, 0, 0, 0))));
+    }
 }
 
 // 모든 데스크톱(Space)에 보이고, Mission Control에서 움직이지 않고, 창 순환(⌘`)에서 빠짐. 높이는 set_level

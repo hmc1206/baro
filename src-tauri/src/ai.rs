@@ -9,6 +9,9 @@ use crate::config::Config;
 const SYSTEM: &str = "You are a quick assistant inside a desktop launcher. \
 Answer concisely in the user's language. Prefer plain text with minimal markdown.";
 
+// 모델은 오늘 날짜를 모르므로 시스템 프롬프트에 넣음
+fn system() -> String { format!("{SYSTEM} Today's date: {}.", crate::news::today()) }
+
 #[derive(Serialize, Clone)]
 struct Chunk { id: u32, text: String }
 #[derive(Serialize, Clone)]
@@ -30,7 +33,7 @@ async fn ollama(url: &str, model: &str, prompt: &str, mut on_text: impl FnMut(&s
         "model": model,
         "stream": true,
         "think": false, // 생각 과정은 건너뛰고 바로 답변 (런처에선 빠른 응답이 중요)
-        "messages": [{ "role": "system", "content": SYSTEM }, { "role": "user", "content": prompt }],
+        "messages": [{ "role": "system", "content": system() }, { "role": "user", "content": prompt }],
     });
     let res = reqwest::Client::new().post(format!("{url}/api/chat")).json(&body).send().await
         .map_err(|_| "Ollama에 연결하지 못했어요. Ollama 앱이 켜져 있는지 확인하세요.".to_string())?;
@@ -66,7 +69,7 @@ async fn stream(app: &AppHandle, key: &str, model: &str, id: u32, prompt: &str) 
         "output_config": { "effort": "low" },
         // 안전 분류기가 거절하면 서버가 다른 모델로 자동 재시도
         "fallbacks": "default",
-        "system": SYSTEM,
+        "system": system(),
         "messages": [{ "role": "user", "content": prompt }],
     });
     let res = reqwest::Client::new()

@@ -129,7 +129,7 @@ pub fn save(source: &str, path: Option<&str>, name: &str, date: &str, dir: &Path
         }
         _ => return Err("알 수 없는 스크린샷 종류예요.".into()),
     };
-    Ok(out.file_name().unwrap().to_string_lossy().into_owned())
+    out.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or_else(|| "저장한 파일 이름을 알 수 없어요.".to_string())
 }
 
 // 첨부 목록 노트: 노트 폴더의 "…-첨부목록.md"(없으면 "<폴더>-첨부목록.md"를 새로 만듦)에

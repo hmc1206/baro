@@ -132,7 +132,7 @@ pub async fn install(dir: &Path, index_url: &str, id: &str) -> Result<Manifest, 
     let tmp: PathBuf = dir.join(format!(".tmp-{id}"));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    std::fs::write(tmp.join("manifest.json"), serde_json::to_vec_pretty(&m).unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(tmp.join("manifest.json"), serde_json::to_vec_pretty(&m).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     for c in &m.commands {
         let f = tmp.join(&c.script);
         if f.exists() { continue; }
@@ -140,7 +140,7 @@ pub async fn install(dir: &Path, index_url: &str, id: &str) -> Result<Manifest, 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755));
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).map_err(|e| format!("실행 권한을 주지 못했어요: {e}"))?;
         }
     }
     let dest = dir.join(id);

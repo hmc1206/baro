@@ -54,11 +54,11 @@ pub fn push(list: &mut Vec<Clip>, text: &str, app: &str, at: i64) -> bool {
 fn save(list: &[Clip]) {
     let Some(f) = FILE.get() else { return };
     let tmp = f.with_extension("json.tmp");
-    let Ok(b) = serde_json::to_vec(list) else { return };
-    if std::fs::write(&tmp, b).is_err() { return; }
+    let Some(b) = crate::log::warn("클립보드 기록 직렬화", serde_json::to_vec(list)) else { return };
+    if crate::log::warn("클립보드 기록 쓰기", std::fs::write(&tmp, b)).is_none() { return; }
     #[cfg(unix)]
-    { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)); }
-    let _ = std::fs::rename(&tmp, f);
+    { use std::os::unix::fs::PermissionsExt; crate::log::warn("클립보드 기록 권한 설정", std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))); }
+    crate::log::warn("클립보드 기록 저장", std::fs::rename(&tmp, f));
 }
 
 fn now_ms() -> i64 {
@@ -84,7 +84,7 @@ pub fn start(file: &Path, enabled: bool) {
     let _ = FILE.set(file.to_path_buf());
     ENABLED.store(enabled, Ordering::Relaxed);
     if let Ok(b) = std::fs::read(file) {
-        if let Ok(v) = serde_json::from_slice::<Vec<Clip>>(&b) { *LIST.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = v; }
+        if let Some(v) = crate::log::warn("클립보드 기록 읽기", serde_json::from_slice::<Vec<Clip>>(&b)) { *LIST.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = v; }
     }
     #[cfg(target_os = "macos")]
     std::thread::spawn(mac::watch);

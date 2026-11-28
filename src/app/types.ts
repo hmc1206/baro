@@ -3,7 +3,7 @@ import type { StoreEntry } from "../commands";
 import type { Doc, NoteSearch, NoteKind } from "../notes";
 import type { DocFields } from "./docfields";
 
-// notes: 내 노트에게 묻기 (sources = 찾은 노트, 답변 아래 출처로 표시)
+// notes: 내 노트에게 묻기 (sources = 찾은 노트, 답변 아래 출처로 표시). 뉴스를 붙인 답변은 sources = 기사(file이 https 주소)
 export type Source = { title: string; file: string };
 export type Ai = { id: number; q: string; text: string; busy: boolean; error: string | null; saved?: string; saveError?: string; notes?: boolean; sources?: Source[] };
 export type Store = { entries: StoreEntry[]; loading: boolean; error: string | null };

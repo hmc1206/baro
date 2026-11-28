@@ -110,7 +110,7 @@ pub fn recent_files(n: usize) -> Vec<String> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     static CACHE: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
-    if let Some((at, v)) = CACHE.lock().unwrap().as_ref() {
+    if let Some((at, v)) = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
         if at.elapsed() < Duration::from_secs(120) { return v.clone(); }
     }
     let mut roots: Vec<std::path::PathBuf> = dirs::home_dir().into_iter()
@@ -125,14 +125,14 @@ pub fn recent_files(n: usize) -> Vec<String> {
             .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(String::from).collect::<Vec<_>>()).unwrap_or_default()
     })).collect();
     let mut seen = std::collections::HashSet::new(); // mdfind가 같은 경로를 두 번 주기도 함
-    let mut out: Vec<(std::time::SystemTime, String)> = handles.into_iter().flat_map(|h| h.join().unwrap_or_default())
+    let mut out: Vec<(std::time::SystemTime, String)> = handles.into_iter().flat_map(|h| h.join().unwrap_or_else(|_| { crate::log::write("실패 최근 파일 검색 스레드 패닉"); vec![] }))
         .filter(|l| seen.insert(l.clone()))
         .filter(|l| !SKIP.iter().any(|s| l.contains(s)) && !l.rsplit('/').next().unwrap_or("").starts_with("._"))
         .filter_map(|l| std::fs::metadata(&l).ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok()).map(|t| (t, l)))
         .collect();
     out.sort_by(|a, b| b.0.cmp(&a.0));
     let v: Vec<String> = out.into_iter().take(n).map(|(_, l)| l).collect();
-    *CACHE.lock().unwrap() = Some((Instant::now(), v.clone()));
+    *CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((Instant::now(), v.clone()));
     v
 }
 
@@ -144,7 +144,8 @@ fn mdfind_name(q: &str, roots: &[std::path::PathBuf], n: usize) -> Vec<String> {
     for r in roots { cmd.arg("-onlyin").arg(r); }
     let Ok(mut child) = cmd.args(["-name", q])
         .stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else { return vec![] };
-    let mut out: Vec<String> = BufReader::new(child.stdout.take().unwrap()).lines()
+    let Some(stdout) = child.stdout.take() else { let _ = child.kill(); let _ = child.wait(); return vec![] };
+    let mut out: Vec<String> = BufReader::new(stdout).lines()
         .map_while(Result::ok)
         .filter(|l| !SKIP.iter().any(|s| l.contains(s)))
         .take(n.max(200))

@@ -82,7 +82,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
 }
 
 struct Chunk { doc: usize, pos: usize, text: String, len: f32, tf: std::collections::HashMap<String, f32>, ekey: u64 }
-struct Doc { file: String, title: String, weight: f32 }
+struct Doc { file: String, title: String, weight: f32, name_toks: std::collections::HashSet<String> }
 pub struct Index { sig: u64, docs: Vec<Doc>, chunks: Vec<Chunk>, df: std::collections::HashMap<String, f32>, avg: f32 }
 
 static INDEX: std::sync::Mutex<Option<std::sync::Arc<Index>>> = std::sync::Mutex::new(None);
@@ -146,9 +146,14 @@ pub fn index(vault: &Path, skip: &[String]) -> std::sync::Arc<Index> {
         let p = Path::new(&e.path);
         let title = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let weight = doc_weight(p.strip_prefix(vault).unwrap_or(p), front);
-        let head = tokenize(&format!("{} {}", title.replace(['-', '_'], " "), front_terms(front)));
+        let rel = p.strip_prefix(vault).unwrap_or(p);
+        // 폴더 이름(프로젝트·주제)도 검색어에: 가까운 폴더 2개까지
+        let dirs: Vec<String> = rel.parent().map(|d| d.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+        let folder = dirs.iter().rev().take(2).map(|d| d.replace(['-', '_'], " ")).collect::<Vec<_>>().join(" ");
+        let name_toks: std::collections::HashSet<String> = tokenize(&format!("{} {}", title.replace(['-', '_'], " "), front_terms(front))).into_iter().collect();
+        let head = tokenize(&format!("{} {} {}", title.replace(['-', '_'], " "), front_terms(front), folder));
         let d = docs.len();
-        docs.push(Doc { file: e.path.clone(), title, weight });
+        docs.push(Doc { file: e.path.clone(), title, weight, name_toks });
         for (pos, text) in chunks_of(body).into_iter().enumerate() {
             let mut tf: std::collections::HashMap<String, f32> = Default::default();
             let body_toks = tokenize(&text);
@@ -218,6 +223,7 @@ pub fn search(vault: &Path, skip_dirs: &[String], q: &str, n: usize) -> Vec<Hit>
 // 뜻 검색 비중과 반영할 상위 단락 수 (검색 평가셋으로 정함)
 const VEC_W: f32 = 0.6;
 const VEC_TOP: usize = 30;
+const NAME_W: f32 = 0.5; // 제목에 질문 단어가 모두 있으면 노트 점수 ×1.5
 
 // 단어 검색(BM25) 순위와 뜻 검색(임베딩 코사인) 순위를 합침 (RRF: 1/(60+순위), 뜻 쪽은 VEC_W배). 노트 점수 = 가장 맞는 단락 + 나머지 조금
 pub fn rank(ix: &Index, q: &str, qvec: Option<&[f32]>, n: usize) -> Vec<Hit> {
@@ -243,8 +249,13 @@ pub fn rank(ix: &Index, q: &str, qvec: Option<&[f32]>, n: usize) -> Vec<Hit> {
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
     let mut per_doc: std::collections::HashMap<usize, Vec<(f32, usize)>> = Default::default();
     for &(s, i) in &scored { per_doc.entry(ix.chunks[i].doc).or_default().push((s, i)); }
+    // 제목·별칭에 질문 단어가 많이 들어 있을수록 가산 (비교 노트처럼 제목이 곧 주제인 노트)
+    let name_cover = |d: usize| {
+        if words.is_empty() { return 0.0; }
+        words.iter().filter(|w| !w.is_empty() && w.iter().all(|t| ix.docs[d].name_toks.contains(t))).count() as f32 / words.len() as f32
+    };
     let mut docs: Vec<(f32, usize)> = per_doc.iter()
-        .map(|(&d, cs)| (cs[0].0 + 0.2 * cs[1..].iter().take(3).map(|c| c.0).sum::<f32>(), d)).collect();
+        .map(|(&d, cs)| ((cs[0].0 + 0.2 * cs[1..].iter().take(3).map(|c| c.0).sum::<f32>()) * (1.0 + NAME_W * name_cover(d)), d)).collect();
     docs.sort_by(|a, b| b.0.total_cmp(&a.0));
     let qt: std::collections::HashSet<&String> = words.iter().flatten().collect();
     docs.into_iter().take(n).map(|(_, d)| {
@@ -348,6 +359,21 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "SSH-키");
         assert!(hits[0].excerpt.contains("ssh-keygen") && !hits[0].excerpt.contains("관계없는"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn folder_name_and_title_cover_help_ranking() {
+        let d = std::env::temp_dir().join(format!("baro-rag-f-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("Zeta-앱")).unwrap();
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        std::fs::write(d.join("Zeta-앱/Tasks.md"), "# 할 일\n- 로그인 만들기").unwrap();
+        std::fs::write(d.join("etc/잡다.md"), "# 잡다\nzeta 앱 이야기 할 일 로그인 이야기").unwrap();
+        std::fs::write(d.join("etc/aa vs bb.md"), "# 비교\n둘의 차이").unwrap();
+        std::fs::write(d.join("etc/aa.md"), "# aa\naa bb 차이 차이 차이").unwrap();
+        assert_eq!(search(&d, &[], "zeta 앱 할 일", 2)[0].title, "Tasks");
+        assert_eq!(search(&d, &[], "aa bb 차이", 2)[0].title, "aa vs bb");
         let _ = std::fs::remove_dir_all(&d);
     }
 

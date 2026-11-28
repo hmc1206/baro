@@ -40,6 +40,14 @@ pub fn write(msg: &str) {
     }
 }
 
+// 실패한 결과의 원인을 "무엇을 하다가: 이유"로 남기고 Ok 값만 돌려줌 (비밀 값이 든 오류는 넘기지 말 것)
+pub fn warn<T, E: std::fmt::Display>(what: &str, r: Result<T, E>) -> Option<T> {
+    match r {
+        Ok(v) => Some(v),
+        Err(e) => { write(&format!("실패 {what}: {e}")); None }
+    }
+}
+
 // 패닉이 나면 위치와 메시지를 로그 파일에 남김 (기본 출력도 그대로 유지)
 pub fn init() {
     let prev = std::panic::take_hook();

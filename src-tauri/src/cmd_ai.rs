@@ -3,13 +3,29 @@
 use super::*;
 
 #[tauri::command]
-pub async fn ask_ai(id: u32, prompt: String, app: AppHandle) -> Result<(), String> {
+pub async fn ask_ai(id: u32, prompt: String, app: AppHandle) -> Result<Vec<rag::Source>, String> {
     let c = config::load(&config_file(&app))?;
     if c.ai_provider == "claude" && c.anthropic_api_key.trim().is_empty() {
         return Err("설정 파일에 anthropic_api_key를 넣거나 ai_provider를 \"ollama\"로 바꿔 주세요.".into());
     }
+    // 최신 소식을 묻는 질문이면 뉴스를 먼저 가져와 근거로 붙임. 출처 링크는 모델이 아니라 여기서 만듦
+    let (prompt, sources) = if news::detect(&prompt) { with_news(&prompt).await } else { (prompt, vec![]) };
     tauri::async_runtime::spawn(ai::ask(app, c, id, prompt));
-    Ok(())
+    Ok(sources)
+}
+
+// 뉴스 기사를 붙인 질문과 출처 목록. 가져오지 못하면 로그만 남기고 질문 그대로(뉴스 없이 답함)
+async fn with_news(question: &str) -> (String, Vec<rag::Source>) {
+    match log::warn("뉴스 가져오기", news::fetch(&news::keyword(question)).await) {
+        Some(items) => {
+            let sources = items.iter().map(|a| rag::Source {
+                title: if a.source.is_empty() { a.title.clone() } else { format!("{} · {}", a.title, a.source) },
+                file: a.link.clone(),
+            }).collect();
+            (news::prompt(&news::today(), question, &items), sources)
+        }
+        None => (question.to_string(), vec![]),
+    }
 }
 
 // AI 답변을 Obsidian 노트로 저장. 저장 폴더를 보는 노트 검색이 없으면 "AI 답변" 노트 검색을 만들어 다시 찾을 수 있게 함
@@ -36,7 +52,8 @@ pub async fn ask_notes(id: u32, question: String, app: AppHandle) -> Result<Vec<
             && embed::fill(&url, &items, 16, |_, _| {}).await.is_ok() {
             embed::save(Some(&rag::embed_keys(&ix)));
         }
-        qvec = embed::embed(&url, std::slice::from_ref(&question)).await.ok().and_then(|mut v| v.pop());
+        // 실패하면 단어 검색만으로 진행
+        qvec = log::warn("질문 뜻 벡터 만들기", embed::embed(&url, std::slice::from_ref(&question)).await).and_then(|mut v| v.pop());
     }
     let hits = rag::rank(&ix, &question, qvec.as_deref(), 5);
     if hits.is_empty() { return Err("질문과 관련된 노트를 찾지 못했어요. 노트에 나올 만한 단어로 물어보세요.".into()); }

@@ -110,10 +110,13 @@ pub async fn events(accts: &[NotionAccount], start: &str, end: &str) -> Result<(
     if let Some((t, k, e)) = lock(&EVENTS).as_ref() { if *k == key && t.elapsed() < Duration::from_secs(60) { return Ok((e.clone(), vec![])); } }
     let (dbs, mut errs) = databases(accts).await;
     let mut out = vec![];
+    // 노션 날짜 필터는 시작일만 비교함 → 지난달에 시작해 이번 달까지 이어지는 일정이 빠지지 않게
+    // 앞쪽을 넉넉히 넓혀 읽고, 끝나는 날(없으면 시작일)이 범위 안에 닿는 것만 남김
+    let from = days_before(start, LOOKBACK_DAYS);
     for db in &dbs {
         let Some(a) = accts.iter().find(|a| a.name == db.account) else { continue };
         let filter = json!({ "and": [
-            { "property": db.date_prop, "date": { "on_or_after": start } },
+            { "property": db.date_prop, "date": { "on_or_after": from } },
             { "property": db.date_prop, "date": { "on_or_before": end } } ] });
         let mut cursor: Option<String> = None;
         for _ in 0..5 { // 최대 500개
@@ -129,10 +132,65 @@ pub async fn events(accts: &[NotionAccount], start: &str, end: &str) -> Result<(
             }
         }
     }
+    out.retain(|e| reaches(e, start));
     out.sort_by(|a, b| a.start.cmp(&b.start).then(a.title.cmp(&b.title)));
     if errs.is_empty() { *lock(&EVENTS) = Some((Instant::now(), key, out.clone())); }
     if out.is_empty() && !errs.is_empty() { return Err(errs.join("\n")); }
     Ok((out, errs))
+}
+
+// 여러 날 일정이 이만큼 앞에서 시작했어도 보이게 (학기 단위 일정까지)
+const LOOKBACK_DAYS: i64 = 120;
+
+// 일정이 start 날짜 이후까지 이어지나 (끝나는 날이 없으면 시작일 기준)
+fn reaches(e: &Event, start: &str) -> bool {
+    let last = e.end.as_deref().unwrap_or(&e.start);
+    last.get(..10).unwrap_or(last) >= start.get(..10).unwrap_or(start)
+}
+
+// "YYYY-MM-DD"에서 n일 전 (형식이 다르면 그대로)
+fn days_before(d: &str, n: i64) -> String {
+    let p: Vec<i64> = d.get(..10).unwrap_or(d).split('-').filter_map(|s| s.parse().ok()).collect();
+    let [y, m, day] = p[..] else { return d.to_string() };
+    // 그레고리력 날짜 ↔ 일수 (Howard Hinnant의 days_from_civil)
+    let (y2, m2) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let doy = (153 * m2 + 2) / 5 + day - 1;
+    let z = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - n;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let dd = doy - (153 * mp + 2) / 5 + 1;
+    let mm = if mp < 10 { mp + 3 } else { mp - 9 };
+    let yy = yoe + era * 400 + i64::from(mm <= 2);
+    format!("{yy:04}-{mm:02}-{dd:02}")
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+    fn ev(start: &str, end: Option<&str>) -> Event {
+        Event { id: String::new(), title: String::new(), start: start.into(), end: end.map(Into::into), done: None, url: String::new(),
+          account: String::new(), color: String::new(), db: String::new(), db_id: String::new() }
+    }
+    #[test]
+    fn days_before_crosses_months_and_years() {
+        assert_eq!(days_before("2026-11-29", 120), "2026-08-01");
+        assert_eq!(days_before("2026-03-01", 1), "2026-02-28");
+        assert_eq!(days_before("2024-03-01", 1), "2024-02-29");
+        assert_eq!(days_before("2027-01-02", 5), "2026-12-28");
+        assert_eq!(days_before("junk", 3), "junk");
+    }
+    #[test]
+    fn keeps_events_that_run_into_the_range() {
+        assert!(reaches(&ev("2026-11-28", Some("2026-12-17")), "2026-11-29")); // 지난달 시작, 이번 달까지
+        assert!(reaches(&ev("2026-12-03T15:00:00.000+09:00", None), "2026-11-29"));
+        assert!(!reaches(&ev("2026-11-20", Some("2026-11-25")), "2026-11-29")); // 범위 전에 끝남
+        assert!(!reaches(&ev("2026-11-20", None), "2026-11-29"));
+    }
 }
 
 fn token<'a>(accts: &'a [NotionAccount], account: &str) -> Result<&'a str, String> {

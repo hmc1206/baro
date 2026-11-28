@@ -62,8 +62,9 @@ fn load() -> HashMap<u64, Q> {
     if b.len() < h + 16 { return map; }
     let n = u64::from_le_bytes(b[h..h + 8].try_into().unwrap()) as usize;
     let dim = u64::from_le_bytes(b[h + 8..h + 16].try_into().unwrap()) as usize;
-    let rec = if new { 12 + dim } else { 8 + dim * 4 };
-    if dim == 0 || b.len() < h + 16 + n * rec { return map; }
+    let rec = if new { dim.saturating_add(12) } else { dim.saturating_mul(4).saturating_add(8) };
+    // 깨진 파일의 큰 값이 곱셈에서 넘쳐 패닉하지 않게 검사
+    if dim == 0 || n.checked_mul(rec).and_then(|t| t.checked_add(h + 16)).is_none_or(|t| b.len() < t) { return map; }
     for i in 0..n {
         let o = h + 16 + i * rec;
         let k = u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
@@ -100,11 +101,11 @@ pub fn save(keep: Option<&std::collections::HashSet<u64>>) {
         b
     });
     let tmp = f.with_extension("bin.tmp");
-    let Ok(mut out) = std::fs::File::create(&tmp) else { return };
-    if out.write_all(&b).is_err() { return; }
+    let Some(mut out) = crate::log::warn("뜻 색인 임시 파일 만들기", std::fs::File::create(&tmp)) else { return };
+    if crate::log::warn("뜻 색인 쓰기", out.write_all(&b)).is_none() { return; }
     #[cfg(unix)]
-    { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)); }
-    let _ = std::fs::rename(&tmp, f);
+    { use std::os::unix::fs::PermissionsExt; crate::log::warn("뜻 색인 권한 설정", std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))); }
+    crate::log::warn("뜻 색인 저장", std::fs::rename(&tmp, f));
 }
 
 // 질문 벡터(길이 1)와 저장된 단락 벡터의 코사인

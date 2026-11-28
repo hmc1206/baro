@@ -314,6 +314,15 @@ export function aiItem(q: string, ask: (q: string) => void, askNotes?: (q: strin
         actions: [{ title: "설정 파일 열기", run: () => invoke("open_config") }] };
 }
 
+// "뉴스" 또는 "뉴스 <키워드>": Google 뉴스에서 기사를 가져와 AI가 요약해 답함 (질문에 "뉴스"가 있으면 Rust가 자동으로 기사를 붙임)
+export function newsItem(q: string, ask: (q: string) => void): Item | null {
+  const m = /^뉴스(?:\s+(.+))?$/.exec(q.trim());
+  if (!m || !config.ai_ready) return null;
+  const kw = m[1]?.trim();
+  return { id: "news", title: kw ? `뉴스: ${kw}` : "오늘의 주요 뉴스", subtitle: `Google 뉴스를 가져와 ${config.ai_model}이 정리해요`, kind: "ai", glyph: "globe",
+    actions: [{ title: "뉴스 요약", keep: true, run: async () => ask(kw ? `뉴스 ${kw}` : "뉴스") }] };
+}
+
 // 내 노트에게 묻기: Vault에서 관련 노트를 찾아 그 발췌로 답함 (출처 노트 표시)
 export function notesAiItem(q: string, askNotes: (q: string) => void): Item | null {
   if (!config.ai_ready) return null;
@@ -339,6 +348,7 @@ export async function query(q: string, ui: Ui): Promise<{ top: Item[]; bottom: I
   if (config.error) top.push({ id: "cfg-err", title: "설정 파일을 읽지 못했어요", subtitle: config.error, kind: "cmd", glyph: "warn",
     actions: [{ title: "설정 파일 열기", run: () => invoke("open_config") }] });
   const c = calc(q); if (c) top.push(c);
+  const news = newsItem(q, ui.ask); if (news) top.push(news);
   top.push(...quicklinks(q));
   const apps = await invoke<AppEntry[]>("search", { q });
   // Baro 명령·확장이 이름이나 키워드 단어로 시작하면 앱보다 먼저. 단, 앱 이름 자체가 검색어로 시작하면 앱 우선

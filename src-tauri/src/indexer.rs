@@ -77,17 +77,17 @@ pub fn icon_file(cache: &Path, app: &str) -> PathBuf {
 // NSWorkspace로 아이콘을 PNG로 저장 (캐시에 없는 것만)
 #[cfg(target_os = "macos")]
 pub fn make_icons(cache: &Path, apps: &[&str]) {
-    let _ = std::fs::create_dir_all(cache);
+    crate::log::warn("아이콘 폴더 만들기", std::fs::create_dir_all(cache));
     let args: Vec<String> = apps.iter()
         .map(|a| (a.to_string(), icon_file(cache, a)))
         .filter(|(_, f)| !f.exists())
         .flat_map(|(a, f)| [a, f.to_string_lossy().into_owned()])
         .collect();
     if args.is_empty() { return; }
-    let _ = std::process::Command::new("osascript")
+    crate::log::warn("아이콘 만들기(osascript)", std::process::Command::new("osascript")
         .args(["-l", "JavaScript", "-e", include_str!("icons.js")])
         .args(args)
-        .output();
+        .output());
 }
 
 #[cfg(not(target_os = "macos"))]

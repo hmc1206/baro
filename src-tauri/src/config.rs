@@ -95,15 +95,17 @@ pub fn load(path: &Path) -> Result<Config, String> {
         Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("설정 파일 형식 오류: {e}")),
         Err(_) => {
             let c = Config::default();
-            if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
-            let _ = std::fs::write(path, serde_json::to_vec_pretty(&c).unwrap_or_default());
+            if let Some(dir) = path.parent() { crate::log::warn("설정 폴더 만들기", std::fs::create_dir_all(dir)); }
+            if let Some(b) = crate::log::warn("기본 설정 직렬화", serde_json::to_vec_pretty(&c)) { crate::log::warn("기본 설정 파일 만들기", std::fs::write(path, b)); }
             Ok(c)
         }
     }
 }
 
 pub fn save(path: &Path, c: &Config) -> Result<(), String> {
-    std::fs::write(path, serde_json::to_vec_pretty(c).unwrap_or_default()).map_err(|e| e.to_string())
+    // 직렬화에 실패해도 빈 파일로 덮어쓰지 않음
+    let b = serde_json::to_vec_pretty(c).map_err(|e| format!("설정을 저장하지 못했어요: {e}"))?;
+    std::fs::write(path, b).map_err(|e| e.to_string())
 }
 
 // 지금 있는 기능(고정 기능 + 노트 검색 + 검색어 없는 퀵링크)의 단축키. 저장된 값이 없으면 기본값

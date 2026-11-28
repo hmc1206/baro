@@ -104,6 +104,7 @@ mod mac {
     // 키 입력 감시 콜백: 안에서 패닉이 나도 macOS 쪽으로 넘어가 앱이 죽지 않게 잡고, 키 입력은 그대로 통과
     unsafe extern "C-unwind" fn callback(_: CGEventTapProxy, ty: CGEventType, ev: NonNull<CGEvent>, _: *mut c_void) -> *mut CGEvent {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| on_event(ty, ev))).unwrap_or_else(|_| {
+            crate::log::write("실패 키 입력 감시 콜백에서 패닉을 잡음");
             BUF.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
             ev.as_ptr()
         })

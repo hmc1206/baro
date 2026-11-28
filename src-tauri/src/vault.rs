@@ -71,12 +71,12 @@ pub fn save() {
     let Some(f) = FILE.get() else { return };
     let snapshot: HashMap<String, Entry> = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
         .map(|m| m.iter().filter(|(_, v)| !secret(&v.text)).map(|(k, v)| (k.clone(), (**v).clone())).collect()).unwrap_or_default();
-    let Ok(b) = serde_json::to_vec(&snapshot) else { return };
+    let Some(b) = crate::log::warn("노트 색인 직렬화", serde_json::to_vec(&snapshot)) else { return };
     let tmp = f.with_extension("json.tmp");
-    if std::fs::write(&tmp, b).is_err() { return; }
+    if crate::log::warn("노트 색인 쓰기", std::fs::write(&tmp, b)).is_none() { return; }
     #[cfg(unix)]
-    { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)); }
-    if std::fs::rename(&tmp, f).is_ok() { *dirty = false; }
+    { use std::os::unix::fs::PermissionsExt; crate::log::warn("노트 색인 권한 설정", std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))); }
+    if crate::log::warn("노트 색인 저장", std::fs::rename(&tmp, f)).is_some() { *dirty = false; }
 }
 
 // 폴더 아래 .md 전부 (하위 폴더 포함). 숨김 폴더(.obsidian·.trash)와 macOS의 ._ 파일은 건너뜀

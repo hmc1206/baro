@@ -216,15 +216,15 @@ export function AiPanel({ onMsg }: { onMsg: (m: string) => void }) {
     setQ("");
     const fail = (e: unknown) => setAi(a => a && a.id === id ? { ...a, busy: false, error: String(e) } : a);
     if (notes) invoke<Source[]>("ask_notes", { id, question: t }).then(sources => setAi(a => a && a.id === id ? { ...a, sources } : a)).catch(fail);
-    else invoke("ask_ai", { id, prompt: t }).catch(fail);
+    else invoke<Source[]>("ask_ai", { id, prompt: t }).then(sources => { if (sources.length) setAi(a => a && a.id === id ? { ...a, sources } : a); }).catch(fail);
   };
   const save = async () => {
     if (!ai || ai.busy || !ai.text.trim() || ai.saved) return;
-    const src = ai.sources?.length ? `\n\n## 출처 노트\n${ai.sources.map((s, i) => `${i + 1}. [[${s.title}]]`).join("\n")}` : "";
+    const src = ai.sources?.length ? `\n\n## ${ai.notes ? "출처 노트" : "출처 기사"}\n${ai.sources.map((s, i) => `${i + 1}. ${ai.notes ? `[[${s.title}]]` : `[${s.title}](${s.file})`}`).join("\n")}` : "";
     try { const saved = await invoke<string>("save_ai", { date: ymd(new Date()), question: ai.q, answer: ai.text + src }); setAi(a => a && { ...a, saved }); onMsg("AI 답변을 Obsidian에 저장했어요"); }
     catch (e) { onMsg(`저장 실패: ${e}`); }
   };
-  const obsidian = (file: string) => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(file)}` });
+  const obsidian = (file: string) => invoke("open_url", { url: /^https:\/\//.test(file) ? file : `obsidian://open?path=${encodeURIComponent(file)}` });
   return <>
     <div className="dk-ai">
       {ai ? <>

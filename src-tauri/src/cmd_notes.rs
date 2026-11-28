@@ -164,7 +164,10 @@ pub fn memo_daily_path(date: String, app: AppHandle) -> Result<String, String> {
 // 빠른 메모: 오늘 Daily 노트 읽기 (이미 적은 메모 보기)
 #[tauri::command]
 pub fn memo_daily_read(date: String, app: AppHandle) -> String {
-    config::load(&config_file(&app)).map(|c| wiki::read_daily(&c.vault_dir, &date)).unwrap_or_default()
+    match config::load(&config_file(&app)) {
+        Ok(c) => wiki::read_daily(&c.vault_dir, &date),
+        Err(_) => { log::write("실패 오늘 메모 읽기: 설정을 읽지 못함"); String::new() } // 오류 문구에 토큰이 섞일 수 있어 원인은 남기지 않음
+    }
 }
 
 // 빠른 메모: 커리큘럼 단계 노트의 "내 기록" 칸에 추가
@@ -217,6 +220,6 @@ pub fn note_write(id: String, file: String, base: String, content: String, name:
     let tmp = f.with_extension("md.baro-tmp");
     std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &to).map_err(|e| e.to_string())?;
-    if to != f { let _ = std::fs::remove_file(&f); }
+    if to != f { crate::log::warn("옛 노트 파일 지우기", std::fs::remove_file(&f)); }
     Ok(to.to_string_lossy().into_owned())
 }
