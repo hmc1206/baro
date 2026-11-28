@@ -1,4 +1,4 @@
-// 바탕화면 패널 내용: 달력(한 달 일정), 클립보드 기록, 빠른 메모(오늘 Daily), 파일 찾기, 창·시스템 명령, 노트 검색·그래프
+// 바탕화면 패널 내용: 달력(한 달 일정), 클립보드 기록, 빠른 메모(오늘 Daily), 파일 찾기, 창·시스템 명령, 노트 검색·그래프, AI에게 묻기
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -9,6 +9,8 @@ import { getConfig, panelCommands } from "../commands";
 import { NoteGraph } from "../graph";
 import { ICONS } from "../icons";
 import { type Doc, type NoteSearch, loadDocs, rank } from "../notes";
+import type { Ai, Source } from "../app/types";
+import { marked } from "marked";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -190,5 +192,59 @@ export function NotesPanel({ initial, graph: graph0, onMsg }: { initial: string;
       {cur.examples.slice(0, 4).map((x, i) => <code key={i} title="누르면 복사" onClick={() => navigator.clipboard.writeText(x.cmd).then(() => onMsg("명령어를 복사했어요"))}>{x.cmd}</code>)}
       <button className="dk-btn" onClick={() => open(cur)}>Obsidian에서 열기</button>
     </div>}
+  </>;
+}
+
+// AI에게 묻기: 런처와 같은 AI(ask_ai)·내 노트에게 묻기(ask_notes). 답은 흘러나오는 대로 보이고 ⌘S·저장으로 Obsidian 노트에
+// 답 조각(ai-chunk)은 모든 창에 가므로 런처와 번호가 겹치지 않게 큰 번호부터 씀
+let aiSeq = 2_000_000_000;
+export function AiPanel({ onMsg }: { onMsg: (m: string) => void }) {
+  const [q, setQ] = useState("");
+  const [ai, setAi] = useState<Ai | null>(null);
+  useEffect(() => {
+    const uns = [
+      listen<{ id: number; text: string }>("ai-chunk", e => setAi(a => a && a.id === e.payload.id ? { ...a, text: a.text + e.payload.text } : a)),
+      listen<{ id: number; error: string | null }>("ai-done", e => setAi(a => a && a.id === e.payload.id ? { ...a, busy: false, error: e.payload.error } : a)),
+    ];
+    return () => { uns.forEach(u => u.then(f => f())); };
+  }, []);
+  const ask = (notes: boolean) => {
+    const t = q.trim();
+    if (!t || ai?.busy) return;
+    const id = ++aiSeq;
+    setAi({ id, q: t, text: "", busy: true, error: null, notes, sources: [] });
+    setQ("");
+    const fail = (e: unknown) => setAi(a => a && a.id === id ? { ...a, busy: false, error: String(e) } : a);
+    if (notes) invoke<Source[]>("ask_notes", { id, question: t }).then(sources => setAi(a => a && a.id === id ? { ...a, sources } : a)).catch(fail);
+    else invoke("ask_ai", { id, prompt: t }).catch(fail);
+  };
+  const save = async () => {
+    if (!ai || ai.busy || !ai.text.trim() || ai.saved) return;
+    const src = ai.sources?.length ? `\n\n## 출처 노트\n${ai.sources.map((s, i) => `${i + 1}. [[${s.title}]]`).join("\n")}` : "";
+    try { const saved = await invoke<string>("save_ai", { date: ymd(new Date()), question: ai.q, answer: ai.text + src }); setAi(a => a && { ...a, saved }); onMsg("AI 답변을 Obsidian에 저장했어요"); }
+    catch (e) { onMsg(`저장 실패: ${e}`); }
+  };
+  const obsidian = (file: string) => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(file)}` });
+  return <>
+    <div className="dk-ai">
+      {ai ? <>
+        <p className="dk-ai-q">{ai.notes ? "내 노트에게 · " : ""}{ai.q}</p>
+        {ai.error ? <p className="dk-pnone">{ai.error}</p>
+          : <article className="md" dangerouslySetInnerHTML={{ __html: marked.parse(ai.text || (ai.busy ? "_생각하는 중…_" : ""), { async: false }) as string }} />}
+        {!!ai.sources?.length && <div className="dk-ai-src">{ai.sources.map(s => <button key={s.file} className="dk-mini" onClick={() => obsidian(s.file)}>{s.title}</button>)}</div>}
+        {!ai.busy && !ai.error && ai.text.trim() && <div className="dk-prow">
+          {ai.saved ? <button className="dk-mini" onClick={() => obsidian(ai.saved!)}>저장한 노트 열기</button> : <button className="dk-mini" onClick={save}>Obsidian에 저장 (⌘S)</button>}
+          <button className="dk-mini" onClick={() => navigator.clipboard.writeText(ai.text).then(() => onMsg("답변을 복사했어요"))}>복사</button>
+        </div>}
+      </> : <p className="dk-pnone">궁금한 걸 적고 Enter · 내 노트에서 찾아 답하려면 ⌘Enter</p>}
+    </div>
+    <div className="dk-prow">
+      <input className="dk-pin" value={q} placeholder="AI에게 묻기 · Enter / 내 노트에게 ⌘Enter" onChange={e => setQ(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); ask(e.metaKey); }
+          else if (e.key === "s" && e.metaKey) { e.preventDefault(); save(); }
+        }} />
+      <button className="dk-btn" disabled={!q.trim() || ai?.busy} onClick={() => ask(false)}>묻기</button>
+    </div>
   </>;
 }

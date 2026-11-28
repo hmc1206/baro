@@ -181,8 +181,11 @@ function notionDbs() {
   return dbs.p;
 }
 // 할 일 하나를 기본 DB에 저장. day: 바탕화면에서 고른 날 (글에 날짜가 없을 때 그 날로)
-export async function addTodo(text: string, day?: string): Promise<string> {
-  const t = day ? todoOn(text, day, new Date()) : parseTodo(text, new Date());
+// day·time·until: 글에 날짜·시각·기간이 없을 때 쓸 시작 날짜·시각·끝나는 날 (바탕화면에서 고른 날, 할 일 화면의 칸)
+export async function addTodo(text: string, day?: string, time?: string | null, until?: string | null): Promise<string> {
+  const p = day ? todoOn(text, day, new Date()) : parseTodo(text, new Date());
+  const q = time && !p.time ? { ...p, time } : p;
+  const t = until && !q.end && until > q.date ? { ...q, end: { date: until, time: null } } : q;
   if (!t.title) throw new Error("할 일 제목을 입력해 주세요");
   const db = (await notionDbs())[0];
   if (!db) throw new Error("노션 일정 DB가 없어요 · 통합을 DB에 연결해 주세요");

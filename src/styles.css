@@ -570,9 +570,10 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .dk.home .dk-stage { height: clamp(300px, 56vh, 560px); }
 /* 할 일 화면에서는 바탕 그래프를 더 흐리게 */
 .dk.todo .dk-bgraph { opacity: .35; }
-.dk-board { flex: 1; min-height: 0; width: min(1120px, 100%); display: grid; gap: 14px; align-content: center;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, auto) minmax(0, auto);
-  grid-template-areas: "next sum" "plan plan" "soon time"; }
+.dk-board { flex: 1; min-height: 0; width: min(1320px, 100%); display: grid; gap: 14px; align-content: center;
+  grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas: "cal cal next" "cal cal plan" "sum time soon"; }
+.dk-cal { grid-area: cal; min-height: min(560px, 52vh); } .dk-cal .month { padding: 0; min-height: 0; } /* 할 일 화면의 한 달 달력 */
 .dk-next { grid-area: next; } .dk-sum { grid-area: sum; } .dk-plan { grid-area: plan; } .dk-time { grid-area: time; } .dk-soon { grid-area: soon; }
 .dk-board > section { min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; }
 .dk-box-k { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
@@ -626,3 +627,18 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .dk-dock button.dk-scr.on { background: rgba(240,174,110,.16); color: #F7C88A; box-shadow: inset 0 0 0 1px rgba(240,174,110,.45); }
 .dk-dock button.dk-scr.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -7px; height: 2px; border-radius: 2px; background: #F0AE6E; box-shadow: 0 0 8px rgba(240,174,110,.7); }
 @media (max-height: 820px) { .dk-rows { max-height: 18vh; } .dk-rows.small, .dk-tl { max-height: 14vh; } .dk-stats b { font-size: 22px; } }
+
+/* 바탕화면 AI 패널 */
+.dk-ai { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 4px 0; font-size: 13.5px; }
+.dk-ai-q { margin: 0; font-weight: 650; color: var(--muted); font-size: 12.5px; }
+.dk-ai .md { line-height: 1.6; }
+.dk-ai-src { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* 할 일 화면 추가 줄: 글 + 날짜 + 시각 + 추가 */
+.dk-addbox { display: flex; flex-direction: column; gap: 6px; }
+.dk-addrow { display: flex; gap: 6px; align-items: center; }
+.dk-addrow .dk-btn.primary { margin-left: auto; }
+.dk-when-in { flex: none; color-scheme: dark; padding: 10px 10px; font-variant-numeric: tabular-nums; }
+.dk-addrow .dk-btn { flex: none; }
+.dk-tilde { color: var(--muted); font-weight: 650; }
+.dk-addrow { flex-wrap: wrap; }

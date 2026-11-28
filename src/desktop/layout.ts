@@ -1,14 +1,14 @@
 // 바탕화면 패널 배치: 위치·크기 맞추기, 저장된 배치 읽기 (화면 코드 없이 테스트할 수 있게 따로)
 export type Rect = { x: number; y: number; w: number; h: number };
-export type PanelId = "calendar" | "clipboard" | "memo" | "files" | "window" | "notes";
+export type PanelId = "calendar" | "clipboard" | "memo" | "files" | "window" | "notes" | "ai";
 export type PanelState = { open: boolean; pinned: boolean; rect: Rect };
 export type Layout = Record<PanelId, PanelState>;
 export type Area = { w: number; h: number; top: number; bottom: number }; // 화면 크기, 위·아래 비워 둘 자리 (메뉴 막대·독)
 
-export const PANELS: PanelId[] = ["calendar", "clipboard", "memo", "files", "window", "notes"];
+export const PANELS: PanelId[] = ["calendar", "clipboard", "memo", "files", "window", "notes", "ai"];
 export const MIN = { w: 280, h: 220 };
 const SIZE: Record<PanelId, { w: number; h: number }> = { calendar: { w: 620, h: 460 }, clipboard: { w: 360, h: 440 }, memo: { w: 380, h: 420 },
-  files: { w: 460, h: 520 }, window: { w: 340, h: 420 }, notes: { w: 820, h: 580 } };
+  files: { w: 460, h: 520 }, window: { w: 340, h: 420 }, notes: { w: 820, h: 580 }, ai: { w: 480, h: 560 } };
 
 // 처음 여는 자리: 달력·노트는 왼쪽 끝, 나머지는 오른쪽 끝. 겹치면 place가 그 아래·옆 빈 곳으로 옮김
 export function defaultRect(id: PanelId, a: Area): Rect {

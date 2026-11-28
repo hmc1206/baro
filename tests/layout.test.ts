@@ -16,7 +16,7 @@ test("settle opens panels without overlaps and closes the oldest loose one when 
   l.calendar.pinned = true;
   const { layout: s, closed } = settle(l, PANELS, [note], a);
   const open = PANELS.filter(id => s[id].open), rs = open.map(id => s[id].rect);
-  assert.ok(closed.length > 0 && !closed.includes("calendar") && !closed.includes("notes")); // 고정한 것·방금 연 것은 남음
+  assert.ok(closed.length > 0 && !closed.includes("calendar") && !closed.includes(PANELS[PANELS.length - 1])); // 고정한 것·방금 연 것은 남음
   assert.deepEqual(open, PANELS.filter(id => !closed.includes(id)));
   rs.forEach((r, i) => { assert.ok(!hits(r, note) && !hits(r, middle(a)), open[i]); rs.slice(i + 1).forEach(q => assert.ok(!hits(r, q))); });
   assert.deepEqual(settle(restore({}, a), PANELS, [], a).closed, []); // 아무것도 안 열려 있으면 그대로

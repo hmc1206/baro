@@ -1,5 +1,5 @@
 // 바탕화면 "할 일" 화면: 그날 계획 전체를 카드 격자로
-// 위 = 다음 할 일(크게) + 요약, 가운데 = 그날 순서, 아래 = 시간 정해진 일정 · 밀린 일 · 다가오는 일
+// 왼쪽 = 한 달 달력(날짜를 누르면 그날로), 오른쪽 = 다음 할 일 · 그날 순서, 아래 = 요약 · 시간 정해진 일정 · 밀린 일 · 다가오는 일
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { type CalDb, type CalEvent, timeOf } from "../app/calendar";
@@ -7,10 +7,10 @@ import { type CalDb, type CalEvent, timeOf } from "../app/calendar";
 const md = (s: string) => `${+s.slice(5, 7)}/${+s.slice(8, 10)}`;
 const openNotion = (e: CalEvent) => invoke("open_url", { url: e.url.replace(/^https:\/\//, "notion://") });
 
-export function TodoBoard({ list, pos, setAt, cur, today, rel, dayName, left, late, upcoming, dbOf, toggleDone, error, setDay, addInput }: {
+export function TodoBoard({ list, pos, setAt, cur, today, rel, dayName, left, late, upcoming, dbOf, toggleDone, error, setDay, addInput, calendar }: {
   list: CalEvent[]; pos: number; setAt: (n: number) => void; cur: CalEvent | undefined; today: string; rel: string; dayName: string; left: number;
   late: CalEvent[]; upcoming: CalEvent[]; dbOf: (e: CalEvent) => CalDb | undefined; toggleDone: (e: CalEvent) => void; error: string | null;
-  setDay: (d: string) => void; addInput: ReactNode;
+  setDay: (d: string) => void; addInput: ReactNode; calendar: ReactNode;
 }) {
   const done = list.length - left;
   const canDone = (e: CalEvent) => e.done !== null && !!dbOf(e)?.done_prop;
@@ -19,6 +19,9 @@ export function TodoBoard({ list, pos, setAt, cur, today, rel, dayName, left, la
   const tag = (e: CalEvent, i: number) => i === pos ? "지금" : i === pos + 1 ? "다음" : e.start.slice(0, 10) < today ? "밀림" : timeOf(e);
   return (
     <main className="dk-board">
+      {/* 한 달 전체: 일정이 있는 날에 표시, 날짜·일정을 누르면 오른쪽이 그날 계획으로 */}
+      <section className="dk-cal dk-glass">{calendar}</section>
+
       {/* 다음 할 일: 고른 할 일을 크게 + 바로 할 동작 */}
       <section className="dk-next dk-glass">
         <div className="dk-next-k"><b>다음 할 일</b>{list.length > 0 && <span>{pos + 1} / {list.length}</span>}<em>{rel !== dayName ? `${rel} · ${dayName}` : dayName}</em></div>

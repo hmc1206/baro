@@ -12,7 +12,7 @@ import { shortDir } from "../app/filekinds";
 import { type Doc, loadDocs, rank } from "../notes";
 import { Panel } from "./Panel";
 import { TodoBoard } from "./TodoBoard";
-import { CalendarPanel, ClipPanel, FilesPanel, MemoPanel, NotesPanel, WindowPanel } from "./panels";
+import { AiPanel, CalendarPanel, ClipPanel, FilesPanel, MemoPanel, NotesPanel, WindowPanel } from "./panels";
 import { type Area, type Layout, type PanelId, type Rect, PANELS, fit, reserve, restore, settle } from "./layout";
 
 const DAYS = ["일", "월", "화", "수", "목", "금", "토"];
@@ -24,18 +24,18 @@ const DOCK: { action: string; icon: string; label: string; panel?: PanelId }[] =
   { action: "baro", icon: "search", label: "검색" },
   { action: "files", icon: "folder", label: "파일 찾기", panel: "files" },
   { action: "memo", icon: "memo", label: "빠른 메모", panel: "memo" },
-  { action: "calendar", icon: "daily", label: "캘린더" }, // 런처 달력 화면 (수정·삭제까지)
+  { action: "calendar", icon: "daily", label: "캘린더", panel: "calendar" }, // ↗로 런처 달력 화면 (수정·삭제)
   { action: "clipboard", icon: "clip", label: "클립보드", panel: "clipboard" },
   { action: "graph", icon: "graph", label: "노트 · 그래프", panel: "notes" },
   { action: "window", icon: "max", label: "창 · 시스템", panel: "window" },
-  { action: "ai", icon: "ai", label: "AI에게 묻기" },
+  { action: "ai", icon: "ai", label: "AI에게 묻기", panel: "ai" },
 ];
 
 type Data = { events: CalEvent[]; dbs: CalDb[]; error: string | null };
 // 메뉴 막대·Dock 자리 (WebKit의 screen.availTop은 표준 타입에 없음)
 const availTop = (screen as Screen & { availTop?: number }).availTop ?? 0;
 const TITLES: Record<PanelId, { title: string; icon: string }> = { calendar: { title: "캘린더", icon: "daily" }, clipboard: { title: "클립보드 기록", icon: "clip" }, memo: { title: "빠른 메모 · 오늘 Daily", icon: "memo" },
-  files: { title: "파일 찾기", icon: "folder" }, window: { title: "창 · 시스템", icon: "max" }, notes: { title: "노트 검색 · 그래프", icon: "graph" } };
+  files: { title: "파일 찾기", icon: "folder" }, window: { title: "창 · 시스템", icon: "max" }, notes: { title: "노트 검색 · 그래프", icon: "graph" }, ai: { title: "AI에게 묻기", icon: "ai" } };
 const STORE = "baro.desktop.panels";
 // 바탕화면 화면 두 개: 홈(지금 할 일 하나를 크게) · 할 일(그날 계획 전체). 마지막으로 본 화면을 기억
 type View = "home" | "todo";
@@ -168,11 +168,16 @@ export function Desktop() {
     } catch (err) { setMsg(`노션 저장 실패: ${err}`); }
     load();
   };
-  const add = async () => {
+  // 할 일 화면에서 추가할 날짜·시각: 시작은 늘 오늘부터 (추가하고 나면 다시 오늘). 글에 "내일", "3시"처럼 적으면 글이 먼저
+  const [addDate, setAddDate] = useState(today);
+  const [addTime, setAddTime] = useState("");
+  const [addEnd, setAddEnd] = useState(""); // 끝나는 날 (비우면 하루)
+  useEffect(() => { setAddDate(today); setAddEnd(""); }, [today]); // 자정이 지나면 새 오늘로
+  const add = async (date = day, time = "", until = "") => {
     const t = text.trim();
     if (!t) return;
     setText(""); setMsg("노션에 저장 중…");
-    try { setMsg(await addTodo(t, day)); } catch (e) { setText(t); setMsg(String(e).replace(/^Error: /, "")); }
+    try { setMsg(await addTodo(t, date || day, time || null, until || null)); setAddDate(today); setAddTime(""); setAddEnd(""); } catch (e) { setText(t); setMsg(String(e).replace(/^Error: /, "")); }
   };
 
   const d = fromYmd(day);
@@ -254,8 +259,23 @@ export function Desktop() {
             onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) add(); }} />
           <button className="dk-btn" onClick={() => go("todo")}>{rel} 계획 보기 →</button>
         </section>
-      </main> : <TodoBoard {...{ list, pos, setAt, cur, today, rel, dayName, left, late: lateList, upcoming, dbOf, toggleDone, error: data.error, setDay, addInput: <><input className="dk-add" value={text} placeholder={`${rel}에 할 일 추가 · 예: 3시 회의, 내일 장보기 (Enter)`}
-            onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) add(); }} /></> }} />}
+      </main> : <TodoBoard {...{ list, pos, setAt, cur, today, rel, dayName, left, late: lateList, upcoming, dbOf, toggleDone, error: data.error, setDay, calendar: <CalendarPanel day={day} onDay={setDay} />, addInput: <div className="dk-addbox">
+            <input className="dk-add" value={text} placeholder="할 일 적고 Enter · 날짜·시각은 아래에서"
+              onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) add(addDate, addTime, addEnd); }} />
+            <div className="dk-addrow">
+              <input className="dk-add dk-when-in" type="date" value={addDate} title="시작 날짜" onChange={e => { const v = e.target.value || day; setAddDate(v); if (addEnd && addEnd <= v) setAddEnd(""); }} />
+              {addEnd ? <>
+                <span className="dk-tilde">~</span>
+                <input className="dk-add dk-when-in" type="date" value={addEnd} min={shiftYmd(addDate, 1)} title="끝나는 날" onChange={e => setAddEnd(e.target.value > addDate ? e.target.value : "")} />
+                <button className="dk-link" onClick={() => setAddEnd("")}>하루만</button>
+              </> : <button className="dk-link" onClick={() => setAddEnd(shiftYmd(addDate, 1))}>+ 끝나는 날</button>}
+              {addTime ? <>
+                <input className="dk-add dk-when-in" type="time" value={addTime} title="시각" onChange={e => setAddTime(e.target.value)} />
+                <button className="dk-link" onClick={() => setAddTime("")}>하루 종일로</button>
+              </> : <button className="dk-link" onClick={() => setAddTime("09:00")}>+ 시각 추가</button>}
+              <button className="dk-btn primary" disabled={!text.trim()} onClick={() => add(addDate, addTime, addEnd)}>추가</button>
+            </div>
+          </div> }} />}
 
       {PANELS.filter(id => layout[id].open).map(id => (
         <Panel key={id} title={TITLES[id].title} icon={TITLES[id].icon} rect={layout[id].rect} pinned={layout[id].pinned} z={10 + order.indexOf(id)}
@@ -264,6 +284,7 @@ export function Desktop() {
           onLauncher={() => invoke("open_launcher", { action: id === "notes" ? (notesAt.id === "__vault" ? "graph" : `note:${notesAt.id}`) : id === "window" ? "baro" : id })}>
           {id === "calendar" ? <CalendarPanel day={day} onDay={setDay} /> : id === "clipboard" ? <ClipPanel onMsg={setMsg} />
             : id === "files" ? <FilesPanel onMsg={setMsg} /> : id === "window" ? <WindowPanel onMsg={setMsg} />
+            : id === "ai" ? <AiPanel onMsg={setMsg} />
             : id === "notes" ? <NotesPanel key={notesAt.n} initial={notesAt.id} graph={notesAt.graph} onMsg={setMsg} /> : <MemoPanel onMsg={setMsg} />}
         </Panel>
       ))}
