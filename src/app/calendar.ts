@@ -210,3 +210,13 @@ export function weekBars(list: CalEvent[], week: string[], maxLanes: number): { 
   }
   return { bars, hidden };
 }
+
+// 할 일마다 다른 색: 같은 계정 할 일이 전부 같은 색이라 구분이 안 돼서, 노션 페이지 id로 8색 중 하나를 고정으로 줌
+// (같은 할 일은 달력·목록·바탕화면 어디서나 같은 색. 계정은 글자로 표시)
+export const TODO_COLORS = ["#F5A524", "#2BB5A0", "#4C8DF6", "#9B7BF2", "#E2679A", "#6BBF59", "#F07C3C", "#3BB6D9"];
+export function todoColor(id: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  return TODO_COLORS[(h >>> 0) % TODO_COLORS.length];
+}
+export const paint = (list: CalEvent[]): CalEvent[] => list.map(e => ({ ...e, color: todoColor(e.id) }));

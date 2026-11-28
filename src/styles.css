@@ -361,7 +361,7 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 
 /* ── 바탕화면 모드 ("desktop" 창): 바탕화면 그림 위에 어두운 유리 카드. 시스템 밝기와 상관없이 어두운 톤 ── */
 :root.desk { --text:#EEF2EF; --muted:rgba(226,236,232,.58); --line:rgba(190,230,220,.12); --surface:rgba(16,30,30,.92); --field:rgba(255,255,255,.06);
-  --pop:rgba(14,26,26,.97); --danger:#F2555A; --accent-text:var(--accent); --tile:rgba(160,220,205,.07); color-scheme: dark; }
+  --pop:rgba(14,26,26,.97); --danger:#F2555A; --accent-text:var(--accent); --accent-hi:color-mix(in srgb, var(--accent) 62%, #FFF4DE); --tile:rgba(160,220,205,.07); color-scheme: dark; }
 /* 배경: 어두운 틸·차콜 위에 세로 빛 커튼 (아래 오른쪽이 가장 밝음). 바탕화면 사진은 덮음 */
 .dk { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; gap: 18px; padding-left: 28px; padding-right: 28px; overflow: hidden;
   background:
@@ -387,13 +387,13 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .dk-days { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .dk-day { position: relative; display: flex; align-items: baseline; justify-content: center; gap: 5px; padding: 7px 0; border-radius: 9px; transition: background-color .2s, color .2s; }
 .dk-day:hover { background: rgba(255,255,255,.06); }
-.dk-day.on { background: linear-gradient(180deg, #F7C88A, #F0AE6E); color: #24170A; box-shadow: 0 4px 16px rgba(240,174,110,.28); }
+.dk-day.on { background: linear-gradient(180deg, var(--accent-hi), var(--accent)); color: var(--accent-ink); box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 28%, transparent); }
 .dk-wd { font-size: 11px; color: var(--muted); } .dk-day.sun .dk-wd { color: #FF9A90; } .dk-day.sat .dk-wd { color: #93B8FF; }
 .dk-day.on .dk-wd { color: inherit; opacity: .75; }
 .dk-dn { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .dk-dots { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%); display: flex; gap: 2px; }
 .dk-dots i { width: 3px; height: 3px; border-radius: 50%; background: var(--accent); }
-.dk-day.on .dk-dots i { background: #24170A; }
+.dk-day.on .dk-dots i { background: var(--accent-ink); }
 .dk-side { display: flex; align-items: center; gap: 12px; }
 .dk-badge { padding: 5px 10px; border-radius: 9px; font-size: 12px; background: var(--tile); box-shadow: inset 0 0 0 1px rgba(242,85,90,.35); color: #FFB4B6; }
 .dk-clock { display: flex; align-items: baseline; gap: 10px; padding-right: 6px; }
@@ -433,11 +433,11 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .dk-btn { padding: 9px 15px; border-radius: 11px; background: rgba(8,20,20,.55); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); font-size: 13px; font-weight: 600; transition: background-color .15s, transform .1s; }
 .dk-btn:hover { background: rgba(20,40,40,.75); } .dk-btn:active { transform: translateY(1px); }
-.dk-btn.primary { background: linear-gradient(180deg, #F7C88A, #F0AE6E); color: #24170A; box-shadow: 0 6px 18px rgba(240,174,110,.3); }
+.dk-btn.primary { background: linear-gradient(180deg, var(--accent-hi), var(--accent)); color: var(--accent-ink); box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 30%, transparent); }
 .dk-btn.primary:hover { filter: brightness(1.05); }
 .dk-pager { position: absolute !important; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex; gap: 4px; }
 .dk-pager button { width: 6px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.3); transition: width .2s, background-color .2s; padding: 0; }
-.dk-pager button.on { width: 18px; background: #F0AE6E; }
+.dk-pager button.on { width: 18px; background: var(--accent); }
 
 .dk-card { width: 100%; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
 .dk-card-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; padding: 0 4px; }
@@ -445,20 +445,20 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .dk-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; max-height: 24vh; }
 .dk-list li { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 12px; font-size: 13.5px; background: var(--tile); cursor: pointer; transition: background-color .15s; }
 .dk-list li:hover { background: rgba(160,220,205,.12); }
-.dk-list li.on { background: rgba(160,220,205,.14); box-shadow: inset 0 0 0 1px rgba(240,174,110,.4); }
+.dk-list li.on { background: rgba(160,220,205,.14); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
 .dk-tag { flex: none; min-width: 44px; text-align: center; padding: 2px 6px; border-radius: 6px; font-size: 10.5px; font-weight: 700; color: var(--muted);
   background: rgba(0,0,0,.25); font-variant-numeric: tabular-nums; }
-.dk-list li.on .dk-tag { color: #24170A; background: #F0AE6E; }
+.dk-list li.on .dk-tag { color: var(--accent-ink); background: var(--accent); }
 .dk-list li.done .dk-lt { text-decoration: line-through; opacity: .5; }
-.dk-check { width: 22px; height: 22px; flex: none; border-radius: 7px; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.3); font-size: 12px; line-height: 1; color: #24170A !important; transition: background-color .15s; }
+.dk-check { width: 22px; height: 22px; flex: none; border-radius: 7px; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.3); font-size: 12px; line-height: 1; color: var(--accent-ink) !important; transition: background-color .15s; }
 .dk-check:hover:not(:disabled) { background: rgba(255,255,255,.1); }
-.dk-list li.done .dk-check { background: #F0AE6E; box-shadow: none; }
+.dk-list li.done .dk-check { background: var(--accent); box-shadow: none; }
 .dk-check:disabled { opacity: .3; cursor: default; }
 .dk-lt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .dk-empty { margin: auto 0 0; padding: 0; font-size: 18px; color: var(--muted); max-width: 70%; }
 .dk-add { font: inherit; font-size: 13.5px; padding: 11px 14px; border-radius: 12px; border: 0; box-shadow: inset 0 0 0 1px var(--line); background: rgba(0,0,0,.22);
   color: var(--text); outline: none; caret-color: var(--accent); transition: box-shadow .15s; }
-.dk-add:focus { box-shadow: inset 0 0 0 1px rgba(240,174,110,.6), 0 0 0 3px rgba(240,174,110,.15); }
+.dk-add:focus { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent), 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
 .dk-add::placeholder { color: var(--muted); }
 
 /* 아래 독: 아이콘마다 둥근 타일, 켜진 것은 밝은 타일 + 밑줄 */
@@ -505,8 +505,8 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .dk-pnone { color: var(--muted); cursor: default !important; } .dk-pnone:hover { background: none !important; }
 .dk-prow { display: flex; gap: 6px; }
 .dk-pb > .dk-pin { flex: none; }
-.dk-dock button.on { background: rgba(240,174,110,.16); color: #F7C88A; box-shadow: inset 0 0 0 1px rgba(240,174,110,.45); }
-.dk-dock button.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -7px; height: 2px; border-radius: 2px; background: #F0AE6E; box-shadow: 0 0 8px rgba(240,174,110,.7); }
+.dk-dock button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-hi); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.dk-dock button.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -7px; height: 2px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent); }
 .dk-pinned { position: absolute; top: 4px; right: 4px; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }
 .dk-top, .dk-dock { z-index: 50; } .dk-toast { z-index: 60; position: fixed; }
 
@@ -582,7 +582,7 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 /* 다음 할 일: 틸 빛이 도는 큰 카드 */
 .dk-next { background: radial-gradient(120% 140% at 100% 100%, rgba(80,170,155,.28), transparent 60%), linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.015)), rgba(18,40,40,.62) !important; }
 .dk-next-k { display: flex; align-items: center; gap: 8px; font-size: 11px; }
-.dk-next-k b { font-weight: 800; letter-spacing: .04em; color: #F7C88A; }
+.dk-next-k b { font-weight: 800; letter-spacing: .04em; color: var(--accent-hi); }
 .dk-next-k span { padding: 1px 7px; border-radius: 6px; background: rgba(0,0,0,.3); font-weight: 650; font-variant-numeric: tabular-nums; }
 .dk-next-k em { margin-left: auto; font-style: normal; color: var(--muted); }
 .dk-next h2 { margin: 2px 0 0; font-size: clamp(26px, 2.6vw, 36px); line-height: 1.1; font-weight: 700; letter-spacing: -.03em; text-wrap: balance;
@@ -598,13 +598,13 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .dk-stats span { font-size: 11px; color: var(--muted); }
 .dk-stats .warn b { color: #FF9A90; }
 .dk-bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.08); overflow: hidden; }
-.dk-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #F0AE6E, #F7C88A); transition: width .4s ease; }
+.dk-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-hi)); transition: width .4s ease; }
 /* 줄 목록 (순서·밀린 일·다가오는 일) */
 .dk-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; max-height: 26vh; }
 .dk-rows li { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 11px; font-size: 13.5px; background: var(--tile); cursor: pointer; transition: background-color .15s; }
 .dk-rows li:hover { background: rgba(160,220,205,.12); }
-.dk-rows li.on { background: rgba(160,220,205,.14); box-shadow: inset 0 0 0 1px rgba(240,174,110,.4); }
-.dk-rows li.on .dk-tag { color: #24170A; background: #F0AE6E; }
+.dk-rows li.on { background: rgba(160,220,205,.14); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+.dk-rows li.on .dk-tag { color: var(--accent-ink); background: var(--accent); }
 .dk-rows li.done .dk-lt { text-decoration: line-through; opacity: .5; }
 .dk-rows li > i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .dk-rows li.late .dk-tag { color: #FFB4B6; background: rgba(242,85,90,.16); }
@@ -616,16 +616,16 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 /* 타임라인 */
 .dk-tl { list-style: none; margin: 0; padding: 0 0 0 4px; display: flex; flex-direction: column; overflow-y: auto; min-height: 0; max-height: 22vh; }
 .dk-tl li { position: relative; display: flex; gap: 14px; padding: 6px 0 6px 16px; font-size: 13px; cursor: pointer; }
-.dk-tl li::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: rgba(240,174,110,.5); border-radius: 1px; }
-.dk-tl li::after { content: ""; position: absolute; left: -3px; top: 12px; width: 8px; height: 8px; border-radius: 50%; background: #F0AE6E; box-shadow: 0 0 0 3px rgba(16,32,32,.9); }
+.dk-tl li::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: color-mix(in srgb, var(--accent) 50%, transparent); border-radius: 1px; }
+.dk-tl li::after { content: ""; position: absolute; left: -3px; top: 12px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(16,32,32,.9); }
 .dk-tl li.past { opacity: .45; } .dk-tl li.past::after { background: var(--muted); }
-.dk-tl time { flex: none; width: 42px; font-size: 12px; font-weight: 650; color: #F7C88A; font-variant-numeric: tabular-nums; }
+.dk-tl time { flex: none; width: 42px; font-size: 12px; font-weight: 650; color: var(--accent-hi); font-variant-numeric: tabular-nums; }
 .dk-tl span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dk-tl li.dk-blank::before, .dk-tl li.dk-blank::after { display: none; }
 .dk-tl li.dk-blank { padding-left: 0; }
 /* 독: 화면 전환 버튼 */
-.dk-dock button.dk-scr.on { background: rgba(240,174,110,.16); color: #F7C88A; box-shadow: inset 0 0 0 1px rgba(240,174,110,.45); }
-.dk-dock button.dk-scr.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -7px; height: 2px; border-radius: 2px; background: #F0AE6E; box-shadow: 0 0 8px rgba(240,174,110,.7); }
+.dk-dock button.dk-scr.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-hi); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.dk-dock button.dk-scr.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -7px; height: 2px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent); }
 @media (max-height: 820px) { .dk-rows { max-height: 18vh; } .dk-rows.small, .dk-tl { max-height: 14vh; } .dk-stats b { font-size: 22px; } }
 
 /* 바탕화면 AI 패널 */
@@ -642,6 +642,117 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .dk-addrow .dk-btn { flex: none; }
 .dk-tilde { color: var(--muted); font-weight: 650; }
 .dk-addrow { flex-wrap: wrap; }
+
+/* 홈: 바탕 그래프가 글자와 겹치지 않게 조금 어둡게, 제목 뒤에는 어두운 빛 번짐 */
+.dk.home .dk-bgraph canvas { filter: brightness(.72) saturate(.85); }
+.dk.home .dk-hero-card::after { background: radial-gradient(70% 90% at 12% 100%, rgba(4,8,10,.85), rgba(4,8,10,.35) 55%, transparent 80%), linear-gradient(0deg, rgba(4,8,10,.55), transparent 50%); }
+.dk-hero h1 { text-shadow: 0 2px 18px rgba(0,0,0,.6), 0 0 2px rgba(0,0,0,.5); }
+/* 노션에서 불러오는 중: 글자 대신 흐르는 빛 막대 */
+.dk-skel { display: block; height: .9em; width: min(420px, 70%); border-radius: 10px;
+  background: linear-gradient(90deg, rgba(255,255,255,.06) 0%, rgba(255,255,255,.14) 50%, rgba(255,255,255,.06) 100%) 0 0 / 200% 100%;
+  animation: dk-shimmer 1.4s linear infinite; }
+.dk-skel.sm { height: 12px; width: 180px; margin-top: 8px; }
+@keyframes dk-shimmer { to { background-position: -200% 0; } }
+
+/* ── 홈: 왼쪽 = 노트 그래프 틀, 오른쪽 = 할 일 카드 열 (split-layout) ── */
+.dk { --col: clamp(380px, 34vw, 520px); --strip: 60px; --dock: 82px; --cx: max(0px, (100vw - var(--pl, 28px) - var(--pr, 28px) - 1320px) / 2); }
+/* 그래프는 화면 전체 배경 그대로, 홈에서는 내용만 왼쪽으로 옮겨 오른쪽 카드 열과 덜 겹치게 */
+.dk.home .dk-bgraph .graph { transform: translateX(calc((var(--col) + 20px) / -2)); transition: transform .4s ease; }
+/* 오른쪽 열 */
+.dk.home .dk-center { width: var(--col); align-self: flex-end; margin-right: var(--cx); justify-content: flex-start; gap: 12px; }
+.dk.home .dk-stage { height: clamp(220px, 32vh, 340px); pointer-events: auto; }
+.dk.home .dk-peek, .dk.home .dk-pager { display: none; }
+.dk.home .dk-hero-card { pointer-events: auto; padding: 18px 20px 20px; justify-content: flex-start; gap: 12px;
+  background: radial-gradient(120% 120% at 100% 100%, rgba(80,170,155,.22), transparent 60%), linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.015)), rgba(16,34,34,.72);
+  -webkit-backdrop-filter: blur(18px) saturate(140%); backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: 0 24px 60px rgba(0,8,8,.45), inset 0 0 0 1px rgba(190,235,225,.12), inset 0 1px 0 rgba(255,255,255,.08); }
+.dk.home .dk-hero-card::after { display: none; }
+.dk.home .dk-hero { max-width: none; margin-top: auto; }
+.dk.home .dk-hero h1 { font-size: clamp(26px, 2.4vw, 38px); text-shadow: none; }
+.dk.home .dk-acts { position: static !important; margin-top: 4px; }
+.dk-homelist { display: flex; flex-direction: column; gap: 8px; padding: 14px 14px 12px; min-height: 0; }
+.dk-homelist .dk-box-k { padding: 0 4px; }
+.dk-homelist .dk-rows { max-height: none; }
+.dk-homelist .dk-rows li { padding: 8px 10px; font-size: 13px; }
+.dk-homelist .dk-blank { cursor: pointer !important; justify-content: center; }
+.dk.home .dk-quick { flex-wrap: wrap; padding: 10px; gap: 8px; }
+.dk.home .dk-quick-k { display: none; }
+.dk.home .dk-quick .dk-btn { width: 100%; }
+/* 노트 카드는 그래프 틀 안 왼쪽 위에 */
+.dk.home .dk-note { left: calc(var(--pl) + var(--cx) + 14px); top: calc(var(--pt) + var(--strip) + 40px); bottom: calc(var(--pb) + var(--dock) + 40px); }
+.dk.home .dk-stage { flex: 1 1 0; height: auto; min-height: 220px; } /* 오른쪽 열 높이를 그래프 틀과 맞추고, 남는 자리는 큰 카드가 채움 */
+.dk.home .dk-center { padding-bottom: calc(var(--dock) - 82px); }
+/* 홈 카드가 노트를 보여 줄 때: 제목 + 본문 스크롤 + 아래 버튼 */
+.dk.home .dk-notecard { justify-content: flex-start; gap: 10px; }
+.dk-notecard .dk-hero-top .dk-count { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-notecard h1 { margin: 0; font-size: 24px; line-height: 1.2; font-weight: 700; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.dk-notecard .dk-note-md { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 4px 4px 0; font-size: 13.5px; line-height: 1.65; pointer-events: auto; }
+.dk-notecard .dk-note-md :is(h1, h2, h3) { font-size: 15px; margin: 14px 0 6px; }
+
+/* ── 전체 화면: 날짜 띠·홈 카드 열·할 일 격자를 가운데 1320px에 가두지 않고 화면 끝까지 ── */
+.dk { --cx: 0px; --col: clamp(420px, 30vw, 560px); }
+.dk-top { width: 100%; }
+.dk-board { width: 100%; align-content: stretch; }
+.dk.home .dk-center { width: var(--col); }
+
+/* ── 반응형: 다른 모니터 크기에서도 자연스럽게 (폭 기준 → 높이 기준 순) ── */
+/* 큰 화면 (QHD·4K·울트라와이드): 카드 열과 글자를 함께 키움 */
+@media (min-width: 2200px) {
+  .dk { --col: clamp(520px, 26vw, 720px); }
+  .dk-dn { font-size: 15px; } .dk-wd { font-size: 12px; }
+  .dk-clock b { font-size: 26px; }
+  .dk.home .dk-hero h1 { font-size: clamp(38px, 2vw, 52px); }
+  .dk-board { gap: 18px; }
+  .dk-dock button { width: 50px; height: 50px; } .dk-dock button svg { width: 21px; height: 21px; }
+}
+/* 노트북 (≤1440): 카드 열을 조금 좁게, 시계 옆 날짜 글자는 숨김 */
+@media (max-width: 1440px) {
+  .dk { --col: clamp(360px, 33vw, 460px); }
+  .dk-clock span { display: none; }
+  .dk-board > section { padding: 14px 15px; }
+}
+/* 작은 노트북 (≤1280): 할 일 격자를 2열로, 날짜 띠·독을 촘촘하게 */
+@media (max-width: 1280px) {
+  .dk { --col: clamp(340px, 36vw, 420px); }
+  .dk-board { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "cal next" "cal plan" "sum soon"; }
+  .dk-board .dk-time { display: none; } /* 시간 정해진 일정은 순서 목록의 시간 꼬리표로 대신 */
+  .dk-days { gap: 2px; } .dk-day { gap: 3px; }
+  .dk-badge { padding: 5px 8px; font-size: 11px; }
+  .dk-dock { gap: 6px; padding: 8px 8px 10px; } .dk-dock button { width: 40px; height: 40px; }
+  .dk.home .dk-hero h1 { font-size: clamp(24px, 2.6vw, 32px); }
+}
+/* 좁은 창·세로 모니터 (≤1000): 홈은 카드 열이 화면 폭 전체, 그래프는 뒤에 흐리게. 할 일은 한 줄로 쌓고 스크롤 */
+@media (max-width: 1000px) {
+  .dk { --col: 100%; }
+  .dk.home .dk-center { width: 100%; align-self: stretch; }
+  .dk.home .dk-bgraph .graph { transform: none; }
+  .dk.home .dk-bgraph canvas { filter: brightness(.5) saturate(.8); }
+  .dk-board { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: auto; overflow-y: auto;
+    grid-template-areas: "next" "plan" "cal" "sum" "soon"; align-content: start; }
+  .dk-cal { min-height: 420px; }
+  .dk-days { grid-template-columns: repeat(7, minmax(0, 1fr)); } .dk-wd { display: none; }
+  .dk-dock { max-width: 100%; overflow-x: auto; }
+}
+/* 낮은 화면 (≤800 높이): 위아래 여백과 큰 카드 최소 높이를 줄임 */
+@media (max-height: 800px) {
+  .dk { gap: 12px; }
+  .dk.home .dk-stage { min-height: 180px; }
+  .dk-cal { min-height: 0; }
+  .dk-dock button { width: 38px; height: 38px; }
+}
+.dk-plan .dk-rows { flex: 1 1 auto; max-height: none; } /* 순서 목록은 카드 남는 높이를 다 씀 */
+/* 낮은 화면 할 일: 요약·시간 카드를 빼고 순서 목록에 높이를 몰아 줌 (남은·밀린 수는 위 띠 배지와 순서 목록에 있음) */
+@media (max-height: 800px) and (min-width: 1001px) {
+  .dk-board { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "cal next" "cal plan" "cal soon"; }
+  .dk-board .dk-sum, .dk-board .dk-time { display: none; }
+  .dk-rows.small { max-height: 12vh; }
+}
+/* 할 일마다 다른 색이 잘 보이게: 달력 막대 바탕을 조금 진하게, 목록 줄 왼쪽에 그 색 막대 */
+.month-ev { background: color-mix(in srgb, var(--ev) 22%, transparent); box-shadow: inset 3px 0 0 var(--ev); }
+.month-ev.multi { background: color-mix(in srgb, var(--ev) 34%, transparent); }
+.dk-rows li > i, .dk-list li > i { width: 8px; height: 8px; }
 
 /* 바탕화면 커리큘럼 화면: 왼쪽 분야별 진행(누르면 단계·개념 펼침), 오른쪽 고른 분야의 다음 할 일·복습 */
 .dk-board.dk-cu { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); grid-template-areas: none; align-content: stretch; height: calc(100vh - 230px); }

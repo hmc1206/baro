@@ -1,9 +1,9 @@
 // 바탕화면 모드 화면 ("desktop" 창): 위 = 이번 주 날짜 띠 + 시계, 가운데 = 고른 날의 할 일 카드, 아래 = Baro 기능 독
 // 창은 바탕화면 아이콘 위·모든 앱 창 아래에 깔려 있음 (src-tauri/src/desktop.rs)
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { type CalDb, type CalEvent, dayList, eventsOn, shiftYmd, timeOf, ymd } from "../app/calendar";
+import { type CalDb, type CalEvent, dayList, eventsOn, shiftYmd, timeOf, ymd, paint } from "../app/calendar";
 import { addTodo } from "../commands";
 import { ICONS } from "../icons";
 import { marked } from "marked";
@@ -32,7 +32,7 @@ const DOCK: { action: string; icon: string; label: string; panel?: PanelId }[] =
   { action: "ai", icon: "ai", label: "AI에게 묻기", panel: "ai" },
 ];
 
-type Data = { events: CalEvent[]; dbs: CalDb[]; error: string | null };
+type Data = { events: CalEvent[]; dbs: CalDb[]; error: string | null; loaded?: boolean }; // loaded: 노션에서 한 번이라도 받았는지
 // 메뉴 막대·Dock 자리 (WebKit의 screen.availTop은 표준 타입에 없음)
 const availTop = (screen as Screen & { availTop?: number }).availTop ?? 0;
 const TITLES: Record<PanelId, { title: string; icon: string }> = { calendar: { title: "캘린더", icon: "daily" }, clipboard: { title: "클립보드 기록", icon: "clip" }, memo: { title: "빠른 메모 · 오늘 Daily", icon: "memo" },
@@ -74,7 +74,7 @@ export function Desktop() {
   // 패널: 고정한 것은 다시 켜도 그 자리에. 고정 안 한 것은 바탕화면 빈 곳을 누르거나 Esc면 닫힘
   // 띄운 것끼리 겹치지 않게: 열거나 옮기기를 마치면 settle로 빈 곳에 맞춤 (방금 만진 패널이 비켜 감). 노트 카드도 자리 차지
   const noteOn = useRef(false);
-  noteOn.current = !!note;
+  noteOn.current = !!note && scr !== "home"; // 홈에서는 노트가 오른쪽 카드 안에 떠서 자리 비킬 필요 없음
   const fixed = () => noteOn.current ? [noteRect()] : [];
   const [layout, setLayout] = useState<Layout>(() => settle(loadLayout(), PANELS, [], area()).layout);
   const [order, setOrder] = useState<PanelId[]>(PANELS); // 뒤에 있을수록 위
@@ -92,7 +92,7 @@ export function Desktop() {
   };
   const show = (id: PanelId) => { front(id); change(l => fitAll({ ...l, [id]: { ...l[id], open: true } })); };
   const togglePanel = (id: PanelId) => { if (layout[id].open) set(id, { open: false, pinned: false }); else show(id); };
-  useEffect(tidy, [note]); // 노트 카드가 뜨면 왼쪽 패널이 비켜 감
+  useEffect(tidy, [note, scr]); // 노트 카드가 뜨면 왼쪽 패널이 비켜 감
   // 가운데 화면은 양옆 패널·노트 카드만큼 비켜 줌. 끄는 동안엔 그대로 (가운데가 따라 흔들리지 않게)
   const [dragging, setDragging] = useState(false);
   const lastRes = useRef({ l: 0, r: 0 });
@@ -116,7 +116,7 @@ export function Desktop() {
     return () => { un.then(f => f()); };
   }, []);
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") closeLoose(); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { setNote(null); closeLoose(); } };
     const resize = () => change(l => { const n = { ...l }; for (const id of PANELS) n[id] = { ...n[id], rect: fit(n[id].rect, area()) }; return fitAll(n); });
     window.addEventListener("keydown", key); window.addEventListener("resize", resize);
     return () => { window.removeEventListener("keydown", key); window.removeEventListener("resize", resize); };
@@ -137,8 +137,8 @@ export function Desktop() {
     const r = range(dayRef.current);
     loaded.current = r;
     return invoke<Data>("notion_events", { ...r, fresh: false })
-      .then(d => { if (my === seq.current) setData({ events: d.events, dbs: d.dbs, error: null }); })
-      .catch(e => { if (my === seq.current) setData(o => ({ ...o, error: String(e) === "NO_ACCOUNT" ? "노션 계정이 연결되지 않았어요 · 런처의 캘린더에서 연결" : String(e) })); });
+      .then(d => { if (my === seq.current) setData({ events: paint(d.events), dbs: d.dbs, error: null, loaded: true }); })
+      .catch(e => { if (my === seq.current) setData(o => ({ ...o, loaded: true, error: String(e) === "NO_ACCOUNT" ? "노션 계정이 연결되지 않았어요 · 런처의 캘린더에서 연결" : String(e) })); });
   };
   useEffect(() => {
     load();
@@ -169,6 +169,17 @@ export function Desktop() {
   }, [vault, cur?.title]);
   const left = list.filter(e => !e.done).length;
   const week = Array.from({ length: WEEK }, (_, i) => shiftYmd(today, i));
+  // 키보드: ⌘1 홈 · ⌘2 할 일 · ⌘3 커리큘럼 · ←/→ 이전·다음 할 일 (글 입력 중에는 ←→ 그대로)
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.metaKey && (e.key === "1" || e.key === "2" || e.key === "3")) { e.preventDefault(); go(e.key === "1" ? "home" : e.key === "2" ? "todo" : "study"); return; }
+      const t = e.target as HTMLElement;
+      if (e.metaKey || e.altKey || e.ctrlKey || t.closest("input, textarea, [contenteditable]") || list.length < 2) return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); setAt(a => (Math.min(a, list.length - 1) + (e.key === "ArrowLeft" ? -1 : 1) + list.length) % list.length); }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [list.length]);
   const lateList = data.events.filter(e => (e.end ?? e.start).slice(0, 10) < today && (e.end ?? e.start).slice(0, 10) >= shiftYmd(today, -BACK) && e.done === false); // 먼 과거 날을 골라 더 읽어도 밀린 일은 30일까지만
   const late = lateList.length;
   // 할 일 화면 "다가오는 일": 고른 날 다음부터 7일 안의 안 한 일
@@ -201,7 +212,8 @@ export function Desktop() {
   const dayName = `${d.getMonth() + 1}월 ${d.getDate()}일 ${DAYS[d.getDay()]}요일`;
   const rel = day === today ? "오늘" : day === shiftYmd(today, 1) ? "내일" : dayName;
   return (
-    <div className={`dk ${scr}${note ? " noting" : ""}${narrow ? " narrow" : ""}`} onPointerDown={e => { if (e.target === e.currentTarget || (e.target as HTMLElement).closest(".dk-bgraph")) closeLoose(); }} style={{ paddingTop: Math.max(availTop, 28) + 14, paddingLeft: padL, paddingRight: padR, paddingBottom: Math.max(screen.height - availTop - screen.availHeight, 0) + 18 }}>
+    <div className={`dk ${scr}${note ? " noting" : ""}${narrow ? " narrow" : ""}`} onPointerDown={e => { if (e.target === e.currentTarget || (e.target as HTMLElement).closest(".dk-bgraph")) closeLoose(); }} style={{ paddingTop: Math.max(availTop, 28) + 14, paddingLeft: padL, paddingRight: padR, paddingBottom: Math.max(screen.height - availTop - screen.availHeight, 0) + 18,
+      ...({ "--pt": `${Math.max(availTop, 28) + 14}px`, "--pb": `${Math.max(screen.height - availTop - screen.availHeight, 0) + 18}px`, "--pl": `${padL}px`, "--pr": `${padR}px` } as CSSProperties) }}>
       <header className="dk-top dk-glass">
         <div className="dk-days">
           {week.map((w, i) => {
@@ -231,7 +243,7 @@ export function Desktop() {
           onOpen={d => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` })} />
       </div>
       {/* 고른 노트: 본문을 그대로 읽을 수 있는 카드 (스크롤). 비밀번호가 적힌 노트는 가림 */}
-      {note && <aside className="dk-note dk-glass">
+      {note && scr !== "home" && <aside className="dk-note dk-glass">
         <header>
           <div><b>{note.name}</b><small>{shortDir(note.file)}</small></div>
           <button className="dk-btn" onClick={() => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(note.file)}` })}>Obsidian에서 열기</button>
@@ -249,12 +261,25 @@ export function Desktop() {
             <button className="dk-peek r" onClick={() => setAt(a => (a + 1) % list.length)} title="다음 할 일">
               <span>{list[(pos + 1) % list.length].title}</span></button>
           </>}
-          <article className="dk-hero-card">
+          {/* 홈에서 그래프 노트를 누르면: 이 카드가 그 노트 내용으로 (✕ 또는 Esc면 다시 할 일) */}
+          {note ? <article className="dk-hero-card dk-notecard">
+            <div className="dk-hero-top">
+              <span className="dk-chip">노트</span>
+              <span className="dk-count">{shortDir(note.file)}</span>
+              <button className="dk-x" onClick={() => setNote(null)} title="할 일로 돌아가기">✕</button>
+            </div>
+            <h1>{note.name}</h1>
+            <article className="md dk-note-md" key={note.file} dangerouslySetInnerHTML={{ __html: noteHtml }} />
+            <div className="dk-acts">
+              <button className="dk-btn primary" onClick={() => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(note.file)}` })}>Obsidian에서 열기</button>
+              <button className="dk-btn" onClick={() => setNote(null)}>할 일로 돌아가기</button>
+            </div>
+          </article> : <article className="dk-hero-card">
             <div className="dk-hero-top">
               <span className="dk-chip">{rel}{rel !== dayName && <em>{dayName}</em>}</span>
               {list.length > 0 && <span className="dk-count">남은 {left} · 전체 {list.length}</span>}
             </div>
-            {data.error ? <p className="dk-empty">{data.error}</p> : cur ? <>
+            {!data.loaded ? <div className="dk-hero"><span className="dk-skel" style={{ fontSize: 48 }} /><span className="dk-skel sm" /></div> : data.error ? <p className="dk-empty">{data.error}</p> : cur ? <>
               <div className="dk-hero">
                 <span className="dk-when">{rel} · {cur.start.slice(0, 10) < today ? `밀림 · ${+cur.start.slice(5, 7)}/${+cur.start.slice(8, 10)}` : timeOf(cur)}
                   {cur.end && cur.end.slice(0, 10) !== cur.start.slice(0, 10) && ` ~ ${+cur.end.slice(5, 7)}/${+cur.end.slice(8, 10)}`}</span>
@@ -267,16 +292,44 @@ export function Desktop() {
               </div>
               {list.length > 1 && <div className="dk-pager">{list.map((e, i) => <button key={e.id} className={i === pos ? "on" : ""} onClick={() => setAt(i)} title={e.title} />)}</div>}
             </> : <div className="dk-hero"><h1 className="dk-none">{rel} 할 일이 없어요</h1><span className="dk-meta">아래에 적으면 노션에 바로 추가돼요</span></div>}
-          </article>
+          </article>}
         </section>
 
+        {/* 홈 오른쪽: 그날 할 일 짧게 (누르면 위 카드로) */}
+        {data.loaded && list.length > 0 && <section className="dk-homelist dk-glass">
+          <div className="dk-box-k"><b>{rel} 할 일</b><em>{list.length - left}/{list.length} 완료</em></div>
+          <ul className="dk-rows">
+            {list.slice(0, 6).map((e, i) => (
+              <li key={e.id} className={`${i === pos ? "on" : ""}${e.done ? " done" : ""}`} onClick={() => setAt(i)}>
+                <span className="dk-tag">{i === pos ? "지금" : e.start.slice(0, 10) < today ? "밀림" : timeOf(e)}</span>
+                <i style={{ background: e.color || "var(--accent)" }} />
+                <span className="dk-lt">{e.title}</span>
+                <button className="dk-check" disabled={e.done === null || !dbOf(e)?.done_prop} title={e.done ? "완료 취소" : "완료"} onClick={ev => { ev.stopPropagation(); toggleDone(e); }}>{e.done ? "✓" : ""}</button>
+              </li>
+            ))}
+            {list.length > 6 && <li className="dk-blank" onClick={() => go("todo")}>외 {list.length - 6}개 · 할 일 화면에서 보기 →</li>}
+          </ul>
+        </section>}
         <section className="dk-quick dk-glass">
           <span className="dk-quick-k">빠른 추가</span>
           <input className="dk-add" value={text} placeholder={`${rel}에 할 일 추가 · 예: 3시 회의, 내일 장보기 (Enter)`}
             onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) add(); }} />
           <button className="dk-btn" onClick={() => go("todo")}>{rel} 계획 보기 →</button>
         </section>
-      </main> : scr === "study" ? <CurriculumBoard /> : <TodoBoard {...{ list, pos, setAt, cur, today, rel, dayName, left, late: lateList, upcoming, dbOf, toggleDone, error: data.error, setDay, calendar: <CalendarPanel day={day} onDay={setDay} />, addInput: <div className="dk-addbox">
+        {/* 다가오는 일: 고른 날 다음 7일 안의 안 한 일 (누르면 그날로) */}
+        {data.loaded && upcoming.length > 0 && <section className="dk-homelist dk-glass">
+          <div className="dk-box-k"><b>다가오는 일</b><em>{upcoming.length}</em></div>
+          <ul className="dk-rows">
+            {upcoming.map(e => (
+              <li key={e.id} onClick={() => setDay(e.start.slice(0, 10))}>
+                <span className="dk-tag">{+e.start.slice(5, 7)}/{+e.start.slice(8, 10)}</span>
+                <span className="dk-lt">{e.title}</span>
+                <span className="dk-lm">{timeOf(e)}</span>
+              </li>
+            ))}
+          </ul>
+        </section>}
+      </main> : scr === "study" ? <CurriculumBoard /> : <TodoBoard {...{ list, pos, setAt, cur, today, rel, dayName, left, late: lateList, upcoming, loading: !data.loaded, dbOf, toggleDone, error: data.error, setDay, calendar: <CalendarPanel day={day} onDay={setDay} />, addInput: <div className="dk-addbox">
             <input className="dk-add" value={text} placeholder="할 일 적고 Enter · 날짜·시각은 아래에서"
               onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) add(addDate, addTime, addEnd); }} />
             <div className="dk-addrow">

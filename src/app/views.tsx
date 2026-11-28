@@ -71,9 +71,9 @@ export function AiView({ ai, onOpen }: { ai: Ai; onOpen: (file: string) => void 
       <div className="ai-q"><span className="icon glyph ai"><S size={15} strokeWidth={2.2} /></span>{ai.q}</div>
       {ai.error ? <p className="ai-err">{ai.error}</p>
         : <p className="ai-a">{ai.text}{ai.busy && <span className="caret" />}</p>}
-      {ai.notes && !!ai.sources?.length && (
+      {!!ai.sources?.length && (
         <div className="links ai-sources">
-          <div className="links-head">찾은 노트 {ai.sources.length} · 클릭하면 Obsidian에서 열기</div>
+          <div className="links-head">{ai.notes ? `찾은 노트 ${ai.sources.length} · 클릭하면 Obsidian에서 열기` : `관련 기사 ${ai.sources.length} · 클릭하면 브라우저에서 열기`}</div>
           <div className="links-list">{ai.sources.map((s, i) =>
             <button key={s.file} className="link-item" title={s.file} onClick={() => onOpen(s.file)}>[{i + 1}] {s.title}</button>)}</div>
         </div>

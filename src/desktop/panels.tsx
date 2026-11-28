@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { type CalEvent, monthCells, shiftMonth, ymd } from "../app/calendar";
+import { type CalEvent, monthCells, paint, shiftMonth, ymd } from "../app/calendar";
 import { MonthGrid } from "../app/MonthGrid";
 import { shortDir } from "../app/filekinds";
 import { getConfig, panelCommands } from "../commands";
@@ -25,7 +25,7 @@ export function CalendarPanel({ day, onDay }: { day: string; onDay: (d: string) 
       const cells = monthCells(month);
       setLoading(true);
       invoke<{ events: CalEvent[] }>("notion_events", { start: cells[0], end: cells[cells.length - 1], fresh: false })
-        .then(d => { if (live) setEvents(d.events); }).catch(() => {}).finally(() => live && setLoading(false));
+        .then(d => { if (live) setEvents(paint(d.events)); }).catch(() => {}).finally(() => live && setLoading(false));
     };
     load();
     const un = listen("cal-changed", load);

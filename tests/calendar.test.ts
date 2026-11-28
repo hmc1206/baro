@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseTodo, notionStart, sectionOf, visibleEvents, monthCells, shiftMonth, eventsOn, notionRange, whenLabel, applyPick, quickStarts, quickEnds, weekBars, todoOn, dayList, type CalEvent } from "../src/app/calendar.ts";
+import { parseTodo, notionStart, sectionOf, visibleEvents, monthCells, shiftMonth, eventsOn, notionRange, whenLabel, applyPick, quickStarts, quickEnds, weekBars, todoOn, dayList, todoColor, TODO_COLORS, type CalEvent } from "../src/app/calendar.ts";
 
 const now = new Date(2026, 10, 27, 10, 0); // 2026-11-27 금요일
 
@@ -128,4 +128,11 @@ test("dayList puts overdue and undone first", () => {
     ev("pm", "2026-11-27T15:00", false), ev("span", "2026-11-26", false, "2026-11-28"), ev("tmr", "2026-11-28", false)];
   assert.deepEqual(dayList(list, "2026-11-27", "2026-11-27").map(e => e.id), ["late", "span", "pm", "done"]);
   assert.deepEqual(dayList(list, "2026-11-28", "2026-11-27").map(e => e.id), ["span", "tmr"]);
+});
+
+test("todoColor: 같은 할 일은 늘 같은 색, 여러 할 일은 여러 색으로 나뉨", () => {
+  assert.equal(todoColor("abc-123"), todoColor("abc-123"));
+  assert.ok(TODO_COLORS.includes(todoColor("abc-123")));
+  const used = new Set(Array.from({ length: 40 }, (_, i) => todoColor(`page-${i}-${i * 7}`)));
+  assert.ok(used.size >= 6, `색 ${used.size}개만 쓰임`);
 });
