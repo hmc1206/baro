@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
 import {
-  query, fileItems, recentFileItems, featureItems, FEATURE_TITLES, storeItems, homeItems, aiItem, notesAiItem, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
+  query, fileItems, recentFileItems, featureItems, FEATURE_TITLES, storeItems, aiItem, notesAiItem, loadConfig, getConfig, copy, pasteText, copySecret, pasteSecret,
   Item, Action, View, Ui, StoreEntry, Feature,
   appList, saveTodo,
 } from "./commands";
@@ -222,12 +222,19 @@ export default function App() {
     invoke<Record<string, string>>("get_hotkeys").then(keys => setHk({ keys: keys ?? {}, recording: null, error: null }));
   };
   const openExamples = (doc: Doc) => { setExDoc({ doc, prevQ: q }); setQ(""); setMode("examples"); };
+  // 런처는 검색 막대만: 검색 결과·명령에서 고르는 캘린더·메모·클립보드·파일·창 명령·노트(일반·명령어·스니펫)·그래프는 바탕화면 패널로
+  // (패널의 ↗ 버튼이나 커리큘럼·비밀번호 노트는 지금처럼 런처 화면으로. 단축키로 열 때(onShown)는 위 함수들을 그대로 씀)
+  const toPanel = (panel: string) => { invoke("open_panel", { panel }).catch(fail); setQ(""); };
+  const panelNotes = (id: string) => ["notes", "commands", "snippets"].includes(getConfig().note_searches.find(n => n.id === id)?.kind ?? "");
   const ui: Ui = {
-    ask, askNotes, openStore, openNotes, openGraph, openFiles, openMemo: () => openMemo(), openClip, openNoteManager, openHotkeys, togglePin, openCal,
+    ask, askNotes, openStore, openNoteManager, openHotkeys, togglePin,
+    openNotes: (id, asGraph) => id === "__vault" || panelNotes(id) ? toPanel(id === "__vault" ? "graph" : `notes:${id}`) : openNotes(id, asGraph),
+    openGraph: () => toPanel("graph"), openFiles: () => toPanel("files"), openMemo: () => toPanel("memo"), openClip: () => toPanel("clipboard"),
+    openCal: text => text ? openCal(text) : toPanel("calendar"),
     show: v => { setAi(null); setView(v); },
     setQuery: text => { setMode(null); setHint(""); setQ(text); input.current?.focus(); }, // 처음 검색 화면으로 가서 입력
     openApps: () => enter("apps"),
-    openFeature: f => { setFeature(f); enter("feature"); },
+    openFeature: f => { if (f === "window" || f === "system") toPanel("window"); else { setFeature(f); enter("feature"); } },
     setHint: text => { setQ(""); setHint(text); input.current?.focus(); },
   };
 
@@ -394,7 +401,7 @@ export default function App() {
     : mode === "memo" ? memoItems()
     : mode === "clip" ? clipItems()
     : mode === "cal" ? calItems()
-    : home ? homeItems(ui) : [...top, ...files, ...bottom];
+    : home ? [] : [...top, ...files, ...bottom]; // 처음 화면: 목록 없이 검색 막대만
   const graphOn = mode === "note" && graph;
   useEffect(() => {
     if (!pickFile.current || mode !== "note") return;
@@ -403,7 +410,8 @@ export default function App() {
   });
   const memoPickAt = mode === "memo" ? items.findIndex(i => i.id === "memo-pick") : -1; // 빠른 메모: 저장할 곳 칸 수 (그 뒤는 고르기·사진·클립보드)
   // 창 크기 종류: 그래프는 가장 크게, 미리보기가 있는 화면·AI 답변은 넓게. 종류마다 사용자가 맞춘 크기를 기억
-  const sizeKind = graphOn ? "graph" : ai || mode === "note" || mode === "docEdit" || mode === "memo" || mode === "clip" ? "wide" : mode === "cal" ? "graph" : "normal";
+  const bar = home && !view && !ai; // 검색어가 없으면 창을 입력 막대 높이로
+  const sizeKind = bar ? "bar" : graphOn ? "graph" : ai || mode === "note" || mode === "docEdit" || mode === "memo" || mode === "clip" ? "wide" : mode === "cal" ? "graph" : "normal";
   useEffect(() => { invoke("set_view", { kind: sizeKind }); }, [sizeKind]);
   const curClip = mode === "clip" ? clips.list.find(c => `clip-${c.at}` === items[sel]?.id) : undefined;
   // 커리큘럼 허브: 그래프에는 단계 대신 연결된 단계 노트를 보여 주고, 고르면 허브 단계로
@@ -772,7 +780,7 @@ export default function App() {
     : mode === "cal" ? (redate ? "제목 고치기 · 날짜는 아래 버튼이나 달력 칸 · Enter 저장 · ⌘D 삭제 · Esc 취소" : "할 일 입력 · 예: 내일 오후 3시 치과, 12/1~12/5 워크숍, 금요일까지 보고서")
     : mode === "clip" ? "복사했던 글 검색"
     : mode === "memo" ? (picking ? "노트 이름 검색 (비우면 폴더 보기) · Esc 취소" : memo.shot ? "스크린샷 이름 겸 메모 · Enter 저장 · ⌘I 빼기" : "메모 입력 · ⇧Enter 줄바꿈 · Tab 저장할 곳 바꾸기")
-    : hint || "앱, 파일, 명령, 계산, AI에게 묻기";
+    : hint || "앱, 파일, 명령, 계산, AI에게 묻기 · 글 치고 ⌘T 할 일";
   const header = home ? "Baro로 할 수 있는 일"
     : mode === "store" ? `확장 스토어${store.loading ? " · 불러오는 중…" : ""}`
     : mode === "apps" ? (q.trim() ? `앱 ${appRows.length}개` : `설치된 앱 ${appRows.length}개`)
@@ -805,7 +813,7 @@ export default function App() {
   const pickDoc = (d: Doc) => { setPick(d); setMenu(false); };
 
   return (
-    <main className="panel">
+    <main className={bar ? "panel bar" : "panel"}>
       {/* 위쪽 끌기 막대: 잡고 끌면 창이 움직이고, 옮긴 자리는 다음에 열 때도 유지 */}
       <div className="grip" data-tauri-drag-region title="끌어서 창 이동 · 가운데로 되돌리기: '창 위치 초기화'"
         onMouseDown={() => invoke("set_placed", { on: true })}><span data-tauri-drag-region /></div>

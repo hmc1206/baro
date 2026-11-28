@@ -260,7 +260,7 @@ export function NoteGraph({ docs, matches, selected, loading, cacheKey = "", loc
       const text = css.getPropertyValue("--text").trim() || "#222";
       const muted = css.getPropertyValue("--muted").trim() || "#888";
       const accent = css.getPropertyValue("--accent-text").trim() || "#F5A524";
-      const dark = scheme.matches;
+      const dark = scheme.matches || document.documentElement.classList.contains("desk"); // 바탕화면 창은 늘 어두운 톤
       const { matches: m, selected: sel } = props.current;
       const selI = sel ? g.nodes.findIndex(n => n.key === sel.file) : -1;
       const focus = s.hover >= 0 ? s.hover : selI;

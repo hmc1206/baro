@@ -1,9 +1,14 @@
-// 바탕화면 패널 내용: 달력(한 달 일정), 클립보드 기록, 빠른 메모(오늘 Daily)
+// 바탕화면 패널 내용: 달력(한 달 일정), 클립보드 기록, 빠른 메모(오늘 Daily), 파일 찾기, 창·시스템 명령, 노트 검색·그래프
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { type CalEvent, monthCells, shiftMonth, ymd } from "../app/calendar";
 import { MonthGrid } from "../app/MonthGrid";
+import { shortDir } from "../app/filekinds";
+import { getConfig, panelCommands } from "../commands";
+import { NoteGraph } from "../graph";
+import { ICONS } from "../icons";
+import { type Doc, type NoteSearch, loadDocs, rank } from "../notes";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -89,5 +94,101 @@ export function MemoPanel({ onMsg }: { onMsg: (m: string) => void }) {
         onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) save(); }} />
       <button className="dk-btn" onClick={openDaily} title="Obsidian에서 오늘 Daily 열기">열기</button>
     </div>
+  </>;
+}
+
+// 파일 찾기: 비우면 최근 파일, 입력하면 홈·외장 디스크에서 이름으로. 누르면 열기, 버튼으로 Finder·경로 복사
+export function FilesPanel({ onMsg }: { onMsg: (m: string) => void }) {
+  const [q, setQ] = useState("");
+  const [paths, setPaths] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const t = setTimeout(() => {
+      setLoading(true);
+      invoke<string[]>(q.trim() ? "files_wide" : "files_recent", q.trim() ? { q: q.trim() } : {})
+        .then(p => { if (live) setPaths(p.slice(0, 120)); }).catch(() => {}).finally(() => live && setLoading(false));
+    }, q.trim() ? 220 : 0);
+    return () => { live = false; clearTimeout(t); };
+  }, [q]);
+  return <>
+    <input className="dk-pin" value={q} placeholder="파일 이름 (비우면 최근 파일)" onChange={e => setQ(e.target.value)} autoFocus />
+    <ul className="dk-plist">
+      {paths.map(p => {
+        const name = p.normalize("NFC").split("/").pop() ?? p;
+        return (
+          <li key={p} title="누르면 열기" onClick={() => invoke("open_path", { path: p }).catch(e => onMsg(String(e)))}>
+            <span className="dk-ptext">{name}<small>{shortDir(p.normalize("NFC"))}</small></span>
+            <button title="Finder에서 보기" onClick={e => { e.stopPropagation(); invoke("reveal", { path: p }); }}>⌕</button>
+            <button title="경로 복사" onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(p).then(() => onMsg("경로를 복사했어요")); }}>⧉</button>
+          </li>
+        );
+      })}
+      {!paths.length && <li className="dk-pnone">{loading ? "찾는 중…" : q.trim() ? "찾는 파일이 없어요" : "최근 파일이 없어요"}</li>}
+    </ul>
+  </>;
+}
+
+// 창 · 시스템: 방금 쓰던 앱의 창 배치, 잠자기·잠금 같은 명령. 되돌릴 수 없는 것은 한 번 더 눌러야 실행
+export function WindowPanel({ onMsg }: { onMsg: (m: string) => void }) {
+  const [ask, setAsk] = useState<string | null>(null);
+  const cmds = panelCommands();
+  const press = (c: ReturnType<typeof panelCommands>[number]) => {
+    if (c.confirm && ask !== c.id) { setAsk(c.id); onMsg(c.confirm.replace(/Enter를 한 번 더 누르세요\.?/, "한 번 더 누르면 실행해요.")); return; }
+    setAsk(null);
+    c.run().catch(e => onMsg(String(e).startsWith("PERM:") ? "손쉬운 사용 권한이 필요해요 · 런처에서 'Baro 권한 확인'" : String(e)));
+  };
+  const group = (pre: string, title: string) => <>
+    <div className="dk-pk">{title}</div>
+    <div className="dk-grid">{cmds.filter(c => c.id.startsWith(pre)).map(c => {
+      const Svg = ICONS[c.glyph];
+      return <button key={c.id} className={ask === c.id ? "ask" : ""} onClick={() => press(c)}>{Svg && <Svg size={16} strokeWidth={2} />}<span>{c.title.replace(/^창: /, "")}</span></button>;
+    })}</div>
+  </>;
+  return <div className="dk-scroll">{group("w-", "방금 쓰던 앱의 창")}{group("s-", "시스템")}</div>;
+}
+
+// 노트 검색 · 그래프: Obsidian 노트 검색(일반 노트·명령어·스니펫)이나 전체 노트 그래프. 누르면 고르고, 두 번 누르면 Obsidian에서 열기
+const VAULT: NoteSearch = { id: "__vault", name: "전체 노트", dir: "", kind: "notes" };
+export function NotesPanel({ initial, graph: graph0, onMsg }: { initial: string; graph: boolean; onMsg: (m: string) => void }) {
+  const searches = [VAULT, ...getConfig().note_searches.filter(n => ["notes", "commands", "snippets"].includes(n.kind))];
+  const [sid, setSid] = useState(initial);
+  const [graph, setGraph] = useState(graph0);
+  const [docs, setDocs] = useState<Doc[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [q, setQ] = useState("");
+  const [cur, setCur] = useState<Doc | null>(null);
+  useEffect(() => {
+    const s = searches.find(x => x.id === sid) ?? VAULT;
+    let live = true;
+    setLoading(true); setCur(null);
+    loadDocs(s).then(d => { if (live) setDocs(d); }).catch(e => onMsg(`노트를 읽지 못했어요: ${e}`)).finally(() => live && setLoading(false));
+    return () => { live = false; };
+  }, [sid]);
+  const hits = q.trim() ? rank(docs, q.trim()) : docs;
+  const open = (d: Doc) => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` });
+  return <>
+    <div className="dk-prow">
+      <select className="dk-pin dk-sel" value={sid} onChange={e => setSid(e.target.value)}>{searches.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+      <input className="dk-pin" value={q} placeholder={loading ? "노트 불러오는 중…" : `노트 ${docs.length}개에서 찾기`} onChange={e => setQ(e.target.value)} autoFocus />
+      <button className={`dk-btn${graph ? " primary" : ""}`} onClick={() => setGraph(g => !g)} title="그래프로 보기">그래프</button>
+    </div>
+    {graph ? <div className="dk-graph">
+      <NoteGraph docs={docs} matches={q.trim() ? new Set(hits.map(d => d.file)) : null} selected={cur ?? undefined} loading={loading} cacheKey={`dk-${sid}`}
+        onSelect={setCur} onOpen={open} />
+    </div> : <ul className="dk-plist">
+      {hits.slice(0, 150).map(d => (
+        <li key={d.file} className={cur?.file === d.file ? "on" : ""} onClick={() => cur?.file === d.file ? open(d) : setCur(d)} title="한 번 더 누르면 Obsidian에서 열기">
+          <span className="dk-ptext">{d.name}<small>{d.summary || d.category}</small></span>
+        </li>
+      ))}
+      {!hits.length && <li className="dk-pnone">{loading ? "불러오는 중…" : "일치하는 노트가 없어요"}</li>}
+    </ul>}
+    {cur && <div className="dk-pdoc">
+      <b>{cur.name}</b>
+      <p>{cur.summary || cur.body.replace(/[#>*`\-[\]]/g, "").trim().slice(0, 220)}</p>
+      {cur.examples.slice(0, 4).map((x, i) => <code key={i} title="누르면 복사" onClick={() => navigator.clipboard.writeText(x.cmd).then(() => onMsg("명령어를 복사했어요"))}>{x.cmd}</code>)}
+      <button className="dk-btn" onClick={() => open(cur)}>Obsidian에서 열기</button>
+    </div>}
   </>;
 }

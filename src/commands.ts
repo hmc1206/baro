@@ -104,6 +104,7 @@ const COMMANDS: Cmd[] = [
   { id: "s-mute", title: "소리 끄기·켜기", keys: "mute volume 음소거 소리", glyph: "mute", run: sys("mute") },
   { id: "b-notes", title: "노트 검색 관리", keys: "note search obsidian 옵시디언 노트 검색 만들기 추가 관리", glyph: "folder", run: async ui => ui.openNoteManager() },
   { id: "b-pin", title: "창 고정·해제", keys: "pin float always on top 고정 항상 위", glyph: "pin", run: async ui => ui.togglePin() },
+  { id: "b-window", title: "창 · 시스템 명령", keys: "window system 창 관리 배치 절반 최대화 시스템 잠자기 잠금 다크", glyph: "max", run: async ui => ui.openFeature("window") },
   { id: "b-files", title: "파일 찾기 (Finder)", keys: "files finder find 파일 찾기 위치 폴더", glyph: "file", run: async ui => ui.openFiles() },
   { id: "b-memo", title: "빠른 메모", keys: "memo note 메모 기록 적기 daily 데일리 공부 기록", glyph: "memo", run: async ui => ui.openMemo() },
   { id: "b-desktop", title: "바탕화면 모드 켜기·끄기", keys: "desktop 바탕화면 배경 홈 위젯 home", glyph: "max",
@@ -194,6 +195,10 @@ export async function saveTodo(text: string, ui: Ui) {
   ui.setHint(`노션에 저장 중… ${text}`);
   try { ui.setHint(await addTodo(text)); } catch (e) { ui.setHint(String(e).replace(/^Error: /, "")); }
 }
+
+// 바탕화면 "창 · 시스템" 패널의 버튼: 창 배치(w-)와 시스템 명령(s-)
+export const panelCommands = () => COMMANDS.filter(c => /^[ws]-/.test(c.id))
+  .map(c => ({ id: c.id, title: c.title, glyph: c.glyph, confirm: c.confirm, run: () => c.run({} as Ui) })); // w-·s- 명령은 ui를 쓰지 않음
 
 type Scored = { s: number; item: Item };
 function commands(q: string, ui: Ui): Scored[] {

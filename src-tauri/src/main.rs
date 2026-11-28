@@ -74,6 +74,41 @@ fn close(app: &AppHandle) {
 fn desktop_state(app: AppHandle) -> bool { desktop::is_open(&app) }
 #[tauri::command]
 fn desktop_set(on: bool, app: AppHandle) -> Result<(), String> { desktop::set(&app, &data_dir(&app), on) }
+// 단축키·런처 검색: 바탕화면을 앞으로 올리고 그 패널 열기 (calendar, clipboard, memo, files, window, graph, notes:<id>)
+#[tauri::command]
+fn open_panel(panel: String, app: AppHandle) -> Result<(), String> {
+    remember_front(&app);
+    if let Some(w) = app.get_webview_window("main") { let _ = w.hide(); }
+    desktop::open_panel(&app, &data_dir(&app), &panel)
+}
+#[tauri::command]
+fn desktop_lower(app: AppHandle) { desktop::raise(&app, false); }
+#[tauri::command]
+fn desktop_take_pending() -> Option<String> { desktop::take_pending() }
+
+// 단축키 기능 중 바탕화면 패널로 여는 것 (노트 검색은 일반 노트·명령어·스니펫만. 커리큘럼·비밀번호·글쓰기는 런처 화면 그대로)
+fn panel_for(app: &AppHandle, action: &str) -> Option<String> {
+    match action {
+        "files" | "memo" | "calendar" | "clipboard" | "graph" => Some(action.to_string()),
+        _ => {
+            let id = action.strip_prefix("note:")?;
+            let c = config::load(&config_file(app)).ok()?;
+            let n = c.note_searches.iter().find(|n| n.id == id)?;
+            matches!(n.kind.as_str(), "notes" | "commands" | "snippets").then(|| format!("notes:{id}"))
+        }
+    }
+}
+
+// 지금 앞에 있는 앱을 창 관리·붙여넣기 대상으로 기억 (Baro 자신은 빼고)
+fn remember_front(app: &AppHandle) {
+    let st = app.state::<AppState>();
+    let (pid, bundle) = system::frontmost();
+    if pid.is_some() && pid != Some(std::process::id() as i32) {
+        *st.prev_pid.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = pid;
+        *st.prev_bundle.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = bundle;
+    }
+}
+
 // 바탕화면의 독에서: 런처를 그 기능 화면으로 띄움
 #[tauri::command]
 fn open_launcher(action: String, app: AppHandle) {
@@ -90,7 +125,7 @@ fn log_error(msg: String) { log::write(&format!("화면 오류: {msg}")); }
 #[tauri::command]
 fn set_placed(on: bool, app: AppHandle, win: WebviewWindow) {
     *app.state::<AppState>().placed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = on;
-    if !on { let _ = win.center(); }
+    if !on { window::center_top(&win); }
 }
 
 #[tauri::command]
@@ -415,7 +450,7 @@ fn toggle(w: &WebviewWindow, action: &str) {
             *st.prev_bundle.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = bundle;
         }
         // 고정 중이거나 사용자가 옮겨 둔 창은 그 위치를 유지
-        if !visible && !pinned && !*st.placed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) { let _ = w.center(); }
+        if !visible && !pinned && !*st.placed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) { window::center_top(w); }
         let _ = w.show(); let _ = w.set_focus();
     }
     *st.action.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = action.to_string();
@@ -594,6 +629,10 @@ fn main() {
                     if let Some(l) = c.quicklinks.iter().find(|l| l.keyword == kw) { let _ = open::that_detached(&l.url); }
                     return;
                 }
+                if let Some(p) = action.as_deref().and_then(|a| panel_for(app, a)) {
+                    if let Err(e) = (|| { remember_front(app); desktop::open_panel(app, &data_dir(app), &p) })() { log::write(&format!("바탕화면 패널 실패: {e}")); }
+                    return;
+                }
                 if let (Some(action), Some(w)) = (action, app.get_webview_window("main")) { toggle(&w, &action); }
             }).build())
         .plugin(tauri_plugin_dialog::init())
@@ -616,7 +655,7 @@ fn main() {
             window::init(&data_dir(&h).join("window.json"));
             if let Some(w) = h.get_webview_window("main") {
                 let _ = w.set_resizable(true);
-                let _ = w.set_min_size(Some(tauri::LogicalSize::new(window::MIN.0, window::MIN.1)));
+                let _ = w.set_min_size(Some(tauri::LogicalSize::new(window::MIN.0, window::BAR_H)));
                 window::apply(&w, false, true);
             }
             if let Ok(c) = config::load(&config_file(&h)) {
@@ -639,7 +678,14 @@ fn main() {
             Ok(())
         })
         // 창 크기 기억·포커스를 잃으면 숨기기는 런처(main) 창만. 바탕화면 창은 늘 그대로
-        .on_window_event(|w, e| if w.label() != "main" {
+        .on_window_event(|w, e| if w.label() == desktop::LABEL {
+            // 바탕화면: 다른 앱으로 넘어가면 다시 앱 창 아래로, 넘어간 앱을 창 관리 대상으로 기억
+            if let WindowEvent::Focused(false) = e {
+                let app = w.app_handle().clone();
+                desktop::raise(&app, false);
+                std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(150)); remember_front(&app); });
+            }
+        } else if w.label() != "main" {
         } else if let WindowEvent::Resized(_) = e {
             let pinned = *w.app_handle().state::<AppState>().pinned.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(win) = w.app_handle().get_webview_window(w.label()) { window::resized(&win, pinned); }
@@ -671,7 +717,7 @@ fn main() {
             get_hotkeys, set_hotkey, suspend_hotkeys,
             cmd_notes::notes_load, cmd_notes::note_set_field, cmd_notes::note_toggle_task, cmd_notes::note_add_evidence, cmd_notes::note_edit_evidence, cmd_notes::note_stage_status, cmd_notes::note_task_state, cmd_notes::notes_named, cmd_notes::note_add_record, cmd_notes::memo_daily, cmd_notes::memo_daily_read, cmd_notes::memo_daily_path, cmd_notes::shot_latest, cmd_notes::shot_save, cmd_notes::shot_read, cmd_notes::memo_remove, cmd_notes::memo_restore, cmd_notes::memo_replace, cmd_notes::clipboard_text, cmd_notes::note_create, cmd_notes::note_read, cmd_notes::note_write, save_note_search, delete_note_search, pick_folder,
             close_window, set_pinned, set_placed, set_view, window_reset, clip_list, clip_remove, clip_clear, clip_enabled, clip_set_enabled, copy_secret, cmd_notes::concept_create, snippet_expand_set, snippet_expand_state,
-            desktop_state, desktop_set, open_launcher, notion_events, notion_dbs, notion_create, notion_done, notion_edit, notion_trash])
+            desktop_state, desktop_set, open_launcher, open_panel, desktop_lower, desktop_take_pending, notion_events, notion_dbs, notion_create, notion_done, notion_edit, notion_trash])
         .build(tauri::generate_context!())
         .expect("Baro 실행 실패")
         .run(|app, e| {

@@ -12,6 +12,7 @@ pub type Size = (f64, f64);
 pub type Area = (f64, f64, f64, f64); // 작업 영역 x, y, 너비, 높이 (논리 픽셀)
 
 pub const MIN: Size = (360.0, 220.0);
+pub const BAR_H: f64 = 68.0; // 검색어가 없을 때: 입력 막대만
 
 // 종류별 기본 크기
 pub fn default_size(kind: &str) -> Size {
@@ -74,19 +75,32 @@ fn current(pinned: bool) -> String {
     if v.is_empty() { "normal".into() } else { v.clone() }
 }
 
+// "가운데" 자리: 가로는 가운데, 세로는 보통 크기 창이 가운데 올 때의 위쪽 선에 맞춤
+// → 입력 막대(bar)에서 글을 쳐 창이 커져도 입력칸이 제자리에 있음
+fn home_pos(s: Size, area: Area) -> (f64, f64) {
+    let top = area.1 + ((area.3 - fit(size_of("normal"), area).1) / 2.0).max(0.0);
+    keep_inside((area.0 + (area.2 - s.0) / 2.0, top), s, area)
+}
+pub fn center_top(win: &WebviewWindow) {
+    let Some((area, k)) = area_of(win) else { return };
+    let Ok(now) = win.inner_size() else { return };
+    let (x, y) = home_pos((now.width as f64 / k, now.height as f64 / k), area);
+    let _ = win.set_position(LogicalPosition::new(x, y));
+}
+
 // 종류에 맞는 크기로 바꾸기. center: 사용자가 창을 옮기지 않았으면 가운데로
 pub fn apply(win: &WebviewWindow, pinned: bool, center: bool) {
     let kind = current(pinned);
     let Some((area, k)) = area_of(win) else { return };
-    let s = fit(size_of(&kind), area);
+    let s = if kind == "bar" { (fit(size_of("normal"), area).0, BAR_H) } else { fit(size_of(&kind), area) };
     if let Ok(now) = win.inner_size() {
         if ((now.width as f64 / k) - s.0).abs() < 1.0 && ((now.height as f64 / k) - s.1).abs() < 1.0 {
-            if center { let _ = win.center(); }
+            if center { let (x, y) = home_pos(s, area); let _ = win.set_position(LogicalPosition::new(x, y)); }
             return;
         }
     }
     let _ = win.set_size(LogicalSize::new(s.0, s.1));
-    if center { let _ = win.center(); return; }
+    if center { let (x, y) = home_pos(s, area); let _ = win.set_position(LogicalPosition::new(x, y)); return; }
     if let Ok(p) = win.outer_position() {
         let (x, y) = keep_inside((p.x as f64 / k, p.y as f64 / k), s, area);
         let _ = win.set_position(LogicalPosition::new(x, y));
@@ -95,7 +109,7 @@ pub fn apply(win: &WebviewWindow, pinned: bool, center: bool) {
 
 // 화면 종류가 바뀜 (프론트엔드가 알려 줌). 바뀌었으면 true
 pub fn set_view(kind: &str) -> bool {
-    let kind = if matches!(kind, "wide" | "graph") { kind } else { "normal" };
+    let kind = if matches!(kind, "wide" | "graph" | "bar") { kind } else { "normal" };
     let mut v = VIEW.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if *v == kind { return false; }
     *v = kind.to_string();
@@ -108,6 +122,7 @@ pub fn resized(win: &WebviewWindow, pinned: bool) {
     if s.width == 0 || s.height == 0 || !win.is_visible().unwrap_or(false) { return; }
     let size = ((s.width as f64 / k).round(), (s.height as f64 / k).round());
     let kind = current(pinned);
+    if kind == "bar" { return; } // 입력 막대 높이는 고정 (너비는 보통 화면 크기를 따라감)
     {
         let mut g = SIZES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let m = g.get_or_insert_with(HashMap::new);
