@@ -21,6 +21,11 @@ pub const NOTE_KINDS: &[&str] = &["commands", "notes", "snippets", "passwords", 
 #[serde(default)]
 pub struct NotionAccount { pub name: String, pub token: String, pub color: String, pub databases: Vec<String> }
 
+// TimeTree 계정 (읽기 전용): 이메일·비밀번호로 로그인해 일정을 하루 한 번 받아옴. calendars가 비면 모든 캘린더 (이름 또는 id)
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct TimetreeAccount { pub name: String, pub email: String, pub password: String, pub color: String, pub calendars: Vec<String> }
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Config {
@@ -48,6 +53,8 @@ pub struct Config {
     pub snippet_expand: bool,
     // 캘린더·할 일: 노션 계정 여러 개의 일정 DB를 합쳐 보기
     pub notion_accounts: Vec<NotionAccount>,
+    // 캘린더: TimeTree 일정도 함께 보기 (읽기 전용)
+    pub timetree_accounts: Vec<TimetreeAccount>,
 }
 
 // 고정 기능의 단축키 기본값
@@ -85,6 +92,7 @@ impl Default for Config {
             clipboard_history: true,
             snippet_expand: false,
             notion_accounts: vec![],
+            timetree_accounts: vec![],
         }
     }
 }
@@ -132,6 +140,7 @@ pub struct PublicConfig {
     pub store_ready: bool,
     pub note_searches: Vec<NoteSearch>,
     pub notion_accounts: usize, // 토큰을 넣은 노션 계정 수 (토큰은 화면에 넘기지 않음)
+    pub timetree_accounts: usize, // 이메일·비밀번호를 넣은 TimeTree 계정 수
     pub error: Option<String>,
 }
 
@@ -142,9 +151,10 @@ pub fn public(path: &Path) -> PublicConfig {
             ai_model: if c.ai_provider == "claude" { c.ai_model } else { c.ollama_model },
             store_ready: !c.store_url.trim().is_empty(), quicklinks: c.quicklinks, snippets: c.snippets,
             notion_accounts: c.notion_accounts.iter().filter(|a| !a.token.trim().is_empty()).count(),
+            timetree_accounts: c.timetree_accounts.iter().filter(|a| !a.email.trim().is_empty() && !a.password.is_empty()).count(),
             note_searches: c.note_searches, error: None },
         Err(e) => PublicConfig { ai_ready: false, ai_model: String::new(), quicklinks: vec![], snippets: vec![], store_ready: false,
-            note_searches: vec![], notion_accounts: 0, error: Some(e) },
+            note_searches: vec![], notion_accounts: 0, timetree_accounts: 0, error: Some(e) },
     }
 }
 

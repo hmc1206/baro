@@ -1,6 +1,9 @@
 // 캘린더·할 일 화면: 입력한 글에서 날짜·시간 읽기, 날짜별 묶음 이름
 export type CalEvent = { id: string; title: string; start: string; end: string | null; done: boolean | null; url: string; account: string; color: string; db: string; db_id: string };
 export type CalDb = { id: string; name: string; account: string; title_prop: string; date_prop: string; done_prop: string | null };
+// TimeTree 일정은 읽기 전용 (db_id가 "timetree:캘린더id"). 열기: 노션은 노션 앱, TimeTree는 브라우저
+export const isTimetree = (e: CalEvent) => e.db_id.startsWith("timetree:");
+export const appUrl = (e: CalEvent) => isTimetree(e) ? e.url : e.url.replace(/^https:\/\//, "notion://");
 
 const DAYS = ["일", "월", "화", "수", "목", "금", "토"];
 const pad = (n: number) => String(n).padStart(2, "0");

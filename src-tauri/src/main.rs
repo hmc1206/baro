@@ -15,6 +15,7 @@ mod indexer;
 mod log;
 mod news;
 mod notion;
+mod timetree;
 mod desktop;
 mod rag;
 mod search;
@@ -287,7 +288,7 @@ fn main() {
             cmd_config::clip_clear, cmd_config::clip_enabled, cmd_config::clip_set_enabled, cmd_config::copy_secret, cmd_notes::concept_create,
             cmd_config::snippet_expand_set, cmd_config::snippet_expand_state, cmd_window::desktop_state, cmd_window::desktop_set, cmd_window::open_launcher,
             cmd_window::open_panel, cmd_window::desktop_lower, cmd_window::desktop_take_pending, cmd_notion::notion_events, cmd_notion::notion_dbs,
-            cmd_notion::notion_create, cmd_notion::notion_done, cmd_notion::notion_edit, cmd_notion::notion_trash])
+            cmd_notion::notion_create, cmd_notion::notion_done, cmd_notion::notion_edit, cmd_notion::notion_trash, cmd_notion::timetree_refresh])
         .build(tauri::generate_context!())
         .expect("Baro 실행 실패")
         .run(|app, e| {

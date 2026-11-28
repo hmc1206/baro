@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseTodo, notionStart, sectionOf, visibleEvents, monthCells, shiftMonth, eventsOn, notionRange, whenLabel, applyPick, quickStarts, quickEnds, weekBars, todoOn, dayList, todoColor, TODO_COLORS, type CalEvent } from "../src/app/calendar.ts";
+import { parseTodo, notionStart, sectionOf, visibleEvents, monthCells, shiftMonth, eventsOn, notionRange, whenLabel, applyPick, quickStarts, quickEnds, weekBars, todoOn, dayList, todoColor, TODO_COLORS, isTimetree, appUrl, type CalEvent } from "../src/app/calendar.ts";
 
 const now = new Date(2026, 10, 27, 10, 0); // 2026-11-27 금요일
 
@@ -135,4 +135,14 @@ test("todoColor: 같은 할 일은 늘 같은 색, 여러 할 일은 여러 색�
   assert.ok(TODO_COLORS.includes(todoColor("abc-123")));
   const used = new Set(Array.from({ length: 40 }, (_, i) => todoColor(`page-${i}-${i * 7}`)));
   assert.ok(used.size >= 6, `색 ${used.size}개만 쓰임`);
+});
+
+test("TimeTree 일정은 읽기 전용, 브라우저 주소로 열기", () => {
+  const base = { id: "1", title: "t", start: "2026-12-01", end: null, done: null, account: "a", color: "", db: "c" };
+  const tt = { ...base, url: "https://timetreeapp.com/calendars/x", db_id: "timetree:7" };
+  const nt = { ...base, url: "https://www.notion.so/p", db_id: "abc" };
+  assert.equal(isTimetree(tt), true);
+  assert.equal(appUrl(tt), "https://timetreeapp.com/calendars/x");
+  assert.equal(isTimetree(nt), false);
+  assert.equal(appUrl(nt), "notion://www.notion.so/p");
 });

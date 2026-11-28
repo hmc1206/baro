@@ -20,6 +20,8 @@ base64 = "0.22"
 unicode-normalization = "0.1"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
+chrono = "0.4"
+tokio = { version = "1", features = ["time"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSWorkspace", "NSRunningApplication", "NSWindow", "NSResponder"] }

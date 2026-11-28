@@ -3,7 +3,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { type CalDb, type CalEvent, dayList, eventsOn, shiftYmd, timeOf, ymd, paint } from "../app/calendar";
+import { type CalDb, type CalEvent, appUrl, dayList, eventsOn, isTimetree, shiftYmd, timeOf, ymd, paint } from "../app/calendar";
 import { addTodo } from "../commands";
 import { ICONS } from "../icons";
 import { marked } from "marked";
@@ -288,7 +288,7 @@ export function Desktop() {
               </div>
               <div className="dk-acts">
                 {cur.done !== null && dbOf(cur)?.done_prop && <button className="dk-btn primary" onClick={() => toggleDone(cur)}>{cur.done ? "완료 취소" : "완료 →"}</button>}
-                <button className="dk-btn" onClick={() => invoke("open_url", { url: cur.url.replace(/^https:\/\//, "notion://") })}>노션에서 열기</button>
+                <button className="dk-btn" onClick={() => invoke("open_url", { url: appUrl(cur) })}>{isTimetree(cur) ? "TimeTree에서 열기" : "노션에서 열기"}</button>
               </div>
               {list.length > 1 && <div className="dk-pager">{list.map((e, i) => <button key={e.id} className={i === pos ? "on" : ""} onClick={() => setAt(i)} title={e.title} />)}</div>}
             </> : <div className="dk-hero"><h1 className="dk-none">{rel} 할 일이 없어요</h1><span className="dk-meta">아래에 적으면 노션에 바로 추가돼요</span></div>}

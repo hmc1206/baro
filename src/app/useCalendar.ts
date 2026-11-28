@@ -3,14 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import type { Item } from "../commands";
-import { type CalDb, type CalEvent, type Pick, type Todo, applyPick, dayLabel, monthCells, notionRange, paint, parseTodo, sectionOf, shiftMonth, shiftYmd, timeOf, visibleEvents, whenLabel, ymd } from "./calendar";
+import { type CalDb, type CalEvent, type Pick, type Todo, applyPick, isTimetree, dayLabel, monthCells, notionRange, paint, parseTodo, sectionOf, shiftMonth, shiftYmd, timeOf, visibleEvents, whenLabel, ymd } from "./calendar";
 
 export type Cal = { events: CalEvent[]; dbs: CalDb[]; errors: string[]; loading: boolean; error: string | null; msg: string | null };
 const EMPTY: Cal = { events: [], dbs: [], errors: [], loading: false, error: null, msg: null };
 const BACK = 30, AHEAD = 60; // 지난 30일(밀린 할 일) ~ 앞으로 60일
 
-export const NO_ACCOUNT = "노션 계정이 아직 없어요. 'Baro 설정 열기'에서 notion_accounts에 계정 이름·토큰·색을 넣어 주세요.\n" +
-  "토큰: notion.so/my-integrations에서 내부 통합 만들기 → 일정 DB의 ⋯ › 연결에서 그 통합 추가.";
+export const NO_ACCOUNT = "노션·TimeTree 계정이 아직 없어요. 'Baro 설정 열기'에서 notion_accounts(이름·토큰·색) 또는 timetree_accounts(이름·이메일·비밀번호·색)를 넣어 주세요.\n" +
+  "노션 토큰: notion.so/my-integrations에서 내부 통합 만들기 → 일정 DB의 ⋯ › 연결에서 그 통합 추가. TimeTree는 읽기 전용, 하루 한 번 새로 받아요.";
 
 export function useCalendar({ q, setQ }: { q: string; setQ: (q: string) => void }) {
   const [cal, setCal] = useState<Cal>(EMPTY);
@@ -65,9 +65,17 @@ export function useCalendar({ q, setQ }: { q: string; setQ: (q: string) => void 
       .catch(e => my === seq.current && setCal({ ...EMPTY, error: String(e) === "NO_ACCOUNT" ? NO_ACCOUNT : String(e) }));
   };
 
+  // ⌘R: 노션만 새로. TimeTree는 하루 한 번 자동 (막히지 않게)
+  const refresh = () => load(true);
+  // TimeTree 일정에서만: 지금 다시 받기 (1시간에 한 번까지, 결과는 맨 위 안내)
+  const refreshTimetree = async () => {
+    const m = await invoke<string>("timetree_refresh").catch(e => String(e));
+    await load(false, m);
+  };
+
   const calItems = (): Item[] => {
     if (cal.error) return [{ id: "cal-config", title: "Baro 설정 열기", subtitle: "config.json의 notion_accounts에 계정 추가 · 저장 후 다시 열기", kind: "cmd", glyph: "settings",
-      actions: [{ title: "열기", run: () => invoke("open_config") }, { title: "다시 불러오기", shortcut: "⌘R", keep: true, run: () => load(true) }] }];
+      actions: [{ title: "열기", run: () => invoke("open_config") }, { title: "다시 불러오기", shortcut: "⌘R", keep: true, run: refresh }] }];
     const today = ymd(new Date());
     // 이번 달을 보면 밀린 할 일 + 앞으로 일정, 다른 달을 보면 그 달 일정 전부
     const now = month.slice(0, 7) === today.slice(0, 7);
@@ -81,15 +89,20 @@ export function useCalendar({ q, setQ }: { q: string; setQ: (q: string) => void 
             await load(true, e.done ? `완료 취소: ${e.title}` : `✓ 완료: ${e.title}`);
           } }] : [];
       const end = e.end && e.end.slice(0, 10) !== e.start.slice(0, 10) ? `~ ${dayLabel(e.end.slice(0, 10))}` : "";
+      const tt = isTimetree(e); // 읽기 전용: 열기·새로고침만
       return {
         id: `cal-${e.id}`, title: e.title, kind: "cmd", glyph: e.done === null ? "daily" : e.done ? "done" : "todo", color: e.color || undefined,
         section: now ? sectionOf(e, today) : dayLabel(e.start.slice(0, 10)),
         subtitle: [now && e.start.slice(0, 10) < today && sectionOf(e, today) === "밀린 할 일" ? dayLabel(e.start.slice(0, 10)) : timeOf(e), end, e.account, e.db].filter(Boolean).join(" · "),
-        actions: [...toggle,
+        actions: tt ? [
+          { title: "TimeTree에서 열기", shortcut: "⌘O", run: () => invoke("open_url", { url: e.url }) },
+          { title: "새로고침 (노션만)", shortcut: "⌘R", keep: true, run: refresh },
+          { title: "TimeTree 지금 다시 받기 (1시간에 한 번)", keep: true, run: refreshTimetree },
+        ] : [...toggle,
           ...(db ? [{ title: "수정 (제목·날짜)", shortcut: "⌘E", keep: true, run: async () => startRedate(e) }] : []),
           { title: "노션 앱에서 열기", shortcut: "⌘O", run: () => invoke("open_url", { url: e.url.replace(/^https:\/\//, "notion://") }) },
           { title: "브라우저에서 열기", run: () => invoke("open_url", { url: e.url }) },
-          { title: "새로고침", shortcut: "⌘R", keep: true, run: () => load(true) },
+          { title: "새로고침", shortcut: "⌘R", keep: true, run: refresh },
           { title: "삭제 (노션 휴지통)", shortcut: "⌘D", keep: true, confirm: `'${e.title}'을(를) 노션 휴지통으로 보낼까요? 노션 휴지통에서 되살릴 수 있어요. Enter를 한 번 더 누르세요.`,
             run: () => trash(e) }],
       } as Item;

@@ -2,10 +2,10 @@
 // 왼쪽 = 한 달 달력(날짜를 누르면 그날로), 오른쪽 = 다음 할 일 · 그날 순서, 아래 = 요약 · 시간 정해진 일정 · 밀린 일 · 다가오는 일
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { type CalDb, type CalEvent, timeOf } from "../app/calendar";
+import { type CalDb, type CalEvent, appUrl, isTimetree, timeOf } from "../app/calendar";
 
 const md = (s: string) => `${+s.slice(5, 7)}/${+s.slice(8, 10)}`;
-const openNotion = (e: CalEvent) => invoke("open_url", { url: e.url.replace(/^https:\/\//, "notion://") });
+const openNotion = (e: CalEvent) => invoke("open_url", { url: appUrl(e) });
 
 export function TodoBoard({ list, pos, setAt, cur, today, rel, dayName, left, late: lateAll, upcoming, loading, dbOf, toggleDone, error, setDay, addInput, calendar }: {
   list: CalEvent[]; pos: number; setAt: (n: number) => void; cur: CalEvent | undefined; today: string; rel: string; dayName: string; left: number;
@@ -32,7 +32,7 @@ export function TodoBoard({ list, pos, setAt, cur, today, rel, dayName, left, la
           <p className="dk-next-sub">{cur.start.slice(0, 10) < today ? `밀림 · ${md(cur.start)}부터` : timeOf(cur)}{cur.end && cur.end.slice(0, 10) !== cur.start.slice(0, 10) && ` ~ ${md(cur.end)}`} · {cur.account} · {cur.db}</p>
           <div className="dk-next-acts">
             {canDone(cur) && <button className="dk-btn primary" onClick={() => toggleDone(cur)}>{cur.done ? "완료 취소" : "완료 →"}</button>}
-            <button className="dk-btn" onClick={() => openNotion(cur)}>노션에서 열기</button>
+            <button className="dk-btn" onClick={() => openNotion(cur)}>{isTimetree(cur) ? "TimeTree에서 열기" : "노션에서 열기"}</button>
             {list.length > 1 && <button className="dk-link" onClick={() => setAt((pos + 1) % list.length)}>나중에</button>}
           </div>
         </> : <h2 className="dk-none">{rel} 할 일이 없어요</h2>}
