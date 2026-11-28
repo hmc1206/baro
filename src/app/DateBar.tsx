@@ -1,4 +1,5 @@
 // 캘린더 입력칸 아래: 날짜·시간·언제까지를 버튼으로 고르기 (글로 쓴 값보다 버튼이 먼저)
+import { CalendarDays, Clock } from "lucide-react";
 import { type Pick, type Todo, QUICK_TIMES, quickEnds, quickStarts, whenLabel } from "./calendar";
 
 export function DateBar({ draft, setPick, target, setTarget }: {
@@ -6,13 +7,16 @@ export function DateBar({ draft, setPick, target, setTarget }: {
 }) {
   const chip = (key: string, label: string, on: boolean, click: () => void) =>
     <button key={key} className={on ? "chip on" : "chip"} onClick={click}>{label}</button>;
+  // 달력에서 고르기: 다른 버튼과 구분되는 아이콘 버튼
+  const calChip = (key: string, on: boolean, click: () => void) =>
+    <button key={key} className={on ? "chip chip-cal on" : "chip chip-cal"} onClick={click} title="달력 칸을 눌러 고르기"><CalendarDays size={12} strokeWidth={2} />달력</button>;
   return (
     // 버튼을 눌러도 입력칸 포커스 유지 (Enter로 바로 저장)
     <div className="datebar" onMouseDown={e => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault(); }}>
       <div className="datebar-row">
         <span className="datebar-k">날짜</span>
         {quickStarts(new Date()).map(o => chip(o.label, o.label, draft.date === o.date, () => setPick({ date: o.date })))}
-        {chip("cal-start", "📅 달력에서", target === "start", () => setTarget("start"))}
+        {calChip("cal-start", target === "start", () => setTarget("start"))}
       </div>
       <div className="datebar-row">
         <span className="datebar-k">시간</span>
@@ -24,10 +28,10 @@ export function DateBar({ draft, setPick, target, setTarget }: {
         <span className="datebar-k">언제까지</span>
         {chip("none", "없음", !draft.end, () => { setPick({ end: null }); setTarget("start"); })}
         {quickEnds(draft.date).map(o => chip(o.label, o.label, draft.end?.date === o.date, () => setPick({ end: { date: o.date, time: draft.end?.time ?? null } })))}
-        {chip("cal-end", "📅 달력에서", target === "end", () => setTarget("end"))}
+        {calChip("cal-end", target === "end", () => setTarget("end"))}
       </div>
       <div className="datebar-sum">
-        {whenLabel(draft)}
+        <Clock size={12} strokeWidth={2.2} />{whenLabel(draft)}
         <span>{target === "end" ? " · 달력 칸을 누르면 끝 날짜" : " · 달력 칸을 누르면 시작 날짜"}</span>
       </div>
     </div>

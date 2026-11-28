@@ -86,10 +86,10 @@ fn desktop_lower(app: AppHandle) { desktop::raise(&app, false); }
 #[tauri::command]
 fn desktop_take_pending() -> Option<String> { desktop::take_pending() }
 
-// 단축키 기능 중 바탕화면 패널로 여는 것 (노트 검색은 일반 노트·명령어·스니펫만. 커리큘럼·비밀번호·글쓰기는 런처 화면 그대로)
+// 단축키 기능 중 바탕화면 패널로 여는 것 (달력은 런처 화면. 노트 검색은 일반 노트·명령어·스니펫만. 커리큘럼·비밀번호·글쓰기는 런처 화면 그대로)
 fn panel_for(app: &AppHandle, action: &str) -> Option<String> {
     match action {
-        "files" | "memo" | "calendar" | "clipboard" | "graph" => Some(action.to_string()),
+        "files" | "memo" | "clipboard" | "graph" => Some(action.to_string()),
         _ => {
             let id = action.strip_prefix("note:")?;
             let c = config::load(&config_file(app)).ok()?;

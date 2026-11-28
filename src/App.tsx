@@ -230,7 +230,7 @@ export default function App() {
     ask, askNotes, openStore, openNoteManager, openHotkeys, togglePin,
     openNotes: (id, asGraph) => id === "__vault" || panelNotes(id) ? toPanel(id === "__vault" ? "graph" : `notes:${id}`) : openNotes(id, asGraph),
     openGraph: () => toPanel("graph"), openFiles: () => toPanel("files"), openMemo: () => toPanel("memo"), openClip: () => toPanel("clipboard"),
-    openCal: text => text ? openCal(text) : toPanel("calendar"),
+    openCal, // 달력은 런처 화면 그대로 (삭제·수정까지 바로)
     show: v => { setAi(null); setView(v); },
     setQuery: text => { setMode(null); setHint(""); setQ(text); input.current?.focus(); }, // 처음 검색 화면으로 가서 입력
     openApps: () => enter("apps"),

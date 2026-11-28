@@ -1,14 +1,19 @@
 // 바탕화면 모드 화면 ("desktop" 창): 위 = 이번 주 날짜 띠 + 시계, 가운데 = 고른 날의 할 일 카드, 아래 = Baro 기능 독
 // 창은 바탕화면 아이콘 위·모든 앱 창 아래에 깔려 있음 (src-tauri/src/desktop.rs)
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { type CalDb, type CalEvent, dayList, eventsOn, shiftYmd, timeOf, ymd } from "../app/calendar";
 import { addTodo } from "../commands";
 import { ICONS } from "../icons";
+import { marked } from "marked";
+import { NoteGraph } from "../graph";
+import { shortDir } from "../app/filekinds";
+import { type Doc, loadDocs, rank } from "../notes";
 import { Panel } from "./Panel";
-import { CalendarPanel, ClipPanel, MemoPanel } from "./panels";
-import { type Area, type Layout, type PanelId, PANELS, fit, restore } from "./layout";
+import { TodoBoard } from "./TodoBoard";
+import { CalendarPanel, ClipPanel, FilesPanel, MemoPanel, NotesPanel, WindowPanel } from "./panels";
+import { type Area, type Layout, type PanelId, type Rect, PANELS, fit, reserve, restore, settle } from "./layout";
 
 const DAYS = ["일", "월", "화", "수", "목", "금", "토"];
 const WEEK = 7;      // 띠에 보이는 날 수 (오늘부터)
@@ -17,23 +22,31 @@ const REFRESH = 180_000;
 // 독 버튼: panel이 있으면 바탕화면 패널로 열고, 없으면 런처를 그 기능으로
 const DOCK: { action: string; icon: string; label: string; panel?: PanelId }[] = [
   { action: "baro", icon: "search", label: "검색" },
-  { action: "files", icon: "folder", label: "파일 찾기" },
+  { action: "files", icon: "folder", label: "파일 찾기", panel: "files" },
   { action: "memo", icon: "memo", label: "빠른 메모", panel: "memo" },
-  { action: "calendar", icon: "daily", label: "캘린더", panel: "calendar" },
+  { action: "calendar", icon: "daily", label: "캘린더" }, // 런처 달력 화면 (수정·삭제까지)
   { action: "clipboard", icon: "clip", label: "클립보드", panel: "clipboard" },
-  { action: "graph", icon: "graph", label: "노트 그래프" },
+  { action: "graph", icon: "graph", label: "노트 · 그래프", panel: "notes" },
+  { action: "window", icon: "max", label: "창 · 시스템", panel: "window" },
   { action: "ai", icon: "ai", label: "AI에게 묻기" },
 ];
 
 type Data = { events: CalEvent[]; dbs: CalDb[]; error: string | null };
 // 메뉴 막대·Dock 자리 (WebKit의 screen.availTop은 표준 타입에 없음)
 const availTop = (screen as Screen & { availTop?: number }).availTop ?? 0;
-const TITLES: Record<PanelId, { title: string; icon: string }> = { calendar: { title: "캘린더", icon: "daily" }, clipboard: { title: "클립보드 기록", icon: "clip" }, memo: { title: "빠른 메모 · 오늘 Daily", icon: "memo" } };
+const TITLES: Record<PanelId, { title: string; icon: string }> = { calendar: { title: "캘린더", icon: "daily" }, clipboard: { title: "클립보드 기록", icon: "clip" }, memo: { title: "빠른 메모 · 오늘 Daily", icon: "memo" },
+  files: { title: "파일 찾기", icon: "folder" }, window: { title: "창 · 시스템", icon: "max" }, notes: { title: "노트 검색 · 그래프", icon: "graph" } };
 const STORE = "baro.desktop.panels";
+// 바탕화면 화면 두 개: 홈(지금 할 일 하나를 크게) · 할 일(그날 계획 전체). 마지막으로 본 화면을 기억
+type View = "home" | "todo";
+const SCREEN_KEY = "baro.desktop.screen";
+const SCREENS: { id: View; icon: string; label: string }[] = [{ id: "home", icon: "home", label: "홈" }, { id: "todo", icon: "tasks", label: "할 일" }];
 // 패널을 둘 수 있는 자리 (메뉴 막대 아래 ~ 독 위)
 const area = (): Area => ({ w: window.innerWidth, h: window.innerHeight, top: Math.max(availTop, 28), bottom: Math.max(screen.height - availTop - screen.availHeight, 0) + 84 });
 const loadLayout = (): Layout => { let v: unknown = null; try { v = JSON.parse(localStorage.getItem(STORE) ?? "null"); } catch { /* 저장된 배치 없음 */ } return restore(v, area()); };
 const saveLayout = (l: Layout) => { try { localStorage.setItem(STORE, JSON.stringify(l)); } catch { /* 저장 못 해도 화면은 그대로 */ } };
+// 노트 카드 자리 (styles.css .dk-note: 왼쪽 28, 위 110, 아래 100, 폭 min(440px, 30vw))
+const noteRect = (): Rect => ({ x: 28, y: 110, w: Math.min(440, window.innerWidth * 0.3), h: window.innerHeight - 210 });
 const fromYmd = (s: string) => new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));
 
 export function Desktop() {
@@ -43,19 +56,67 @@ export function Desktop() {
   const [data, setData] = useState<Data>({ events: [], dbs: [], error: null });
   const [at, setAt] = useState(0); // 카드에 크게 보이는 할 일 (그날 목록의 몇 번째)
   const [text, setText] = useState("");
+  const [scr, setScr] = useState<View>(() => localStorage.getItem(SCREEN_KEY) === "todo" ? "todo" : "home");
+  const go = (v: View) => { setScr(v); try { localStorage.setItem(SCREEN_KEY, v); } catch { /* 기억 못 해도 전환은 됨 */ } };
   const [msg, setMsg] = useState<string | null>(null);
   const seq = useRef(0);
+  // 바탕 그래프: Obsidian 전체 노트 (처음 한 번 읽음)
+  const [vault, setVault] = useState<Doc[]>([]);
+  const [note, setNote] = useState<Doc | null>(null);
+  const noteHtml = useMemo(() => {
+    if (!note) return "";
+    const pw = note.meta.password;
+    const md = (pw ? note.markdown.split(pw).join("••••••") : note.markdown).replace(/<!--[\s\S]*?-->/g, "");
+    return marked.parse(md.trim() || "_내용이 없는 노트예요_", { async: false }) as string;
+  }, [note]);
+  useEffect(() => { loadDocs({ id: "__vault", name: "전체 노트", dir: "", kind: "notes" }).then(setVault).catch(() => {}); }, []);
   // 패널: 고정한 것은 다시 켜도 그 자리에. 고정 안 한 것은 바탕화면 빈 곳을 누르거나 Esc면 닫힘
-  const [layout, setLayout] = useState<Layout>(loadLayout);
+  // 띄운 것끼리 겹치지 않게: 열거나 옮기기를 마치면 settle로 빈 곳에 맞춤 (방금 만진 패널이 비켜 감). 노트 카드도 자리 차지
+  const noteOn = useRef(false);
+  noteOn.current = !!note;
+  const fixed = () => noteOn.current ? [noteRect()] : [];
+  const [layout, setLayout] = useState<Layout>(() => settle(loadLayout(), PANELS, [], area()).layout);
   const [order, setOrder] = useState<PanelId[]>(PANELS); // 뒤에 있을수록 위
+  const orderRef = useRef(order);
+  orderRef.current = order;
   const change = (f: (l: Layout) => Layout, persist = true) => setLayout(l => { const n = f(l); if (persist) saveLayout(n); return n; });
   const set = (id: PanelId, p: Partial<Layout[PanelId]>, persist = true) => change(l => ({ ...l, [id]: { ...l[id], ...p } }), persist);
-  const front = (id: PanelId) => setOrder(o => o[o.length - 1] === id ? o : [...o.filter(x => x !== id), id]);
-  const togglePanel = (id: PanelId) => { const open = !layout[id].open; set(id, { open, ...(open ? {} : { pinned: false }) }); if (open) front(id); };
-  const closeLoose = () => change(l => { const n = { ...l }; for (const id of PANELS) if (n[id].open && !n[id].pinned) n[id] = { ...n[id], open: false }; return n; });
+  const shut = useRef<PanelId[]>([]); // 자리가 모자라 닫은 패널 → 알림
+  const fitAll = (l: Layout) => { const r = settle(l, orderRef.current, fixed(), area()); if (r.closed.length) shut.current = r.closed; return r.layout; };
+  const tidy = () => change(fitAll);
+  useEffect(() => { if (shut.current.length) { setMsg(`자리가 모자라 ${shut.current.map(id => TITLES[id].title).join(", ")} 패널을 닫았어요 · 📌 고정한 패널은 안 닫아요`); shut.current = []; } }, [layout]);
+  const front = (id: PanelId) => {
+    const o = orderRef.current;
+    if (o[o.length - 1] !== id) { orderRef.current = [...o.filter(x => x !== id), id]; setOrder(orderRef.current); }
+  };
+  const show = (id: PanelId) => { front(id); change(l => fitAll({ ...l, [id]: { ...l[id], open: true } })); };
+  const togglePanel = (id: PanelId) => { if (layout[id].open) set(id, { open: false, pinned: false }); else show(id); };
+  useEffect(tidy, [note]); // 노트 카드가 뜨면 왼쪽 패널이 비켜 감
+  // 가운데 화면은 양옆 패널·노트 카드만큼 비켜 줌. 끄는 동안엔 그대로 (가운데가 따라 흔들리지 않게)
+  const [dragging, setDragging] = useState(false);
+  const lastRes = useRef({ l: 0, r: 0 });
+  if (!dragging) lastRes.current = reserve([...PANELS.filter(id => layout[id].open).map(id => layout[id].rect), ...fixed()], window.innerWidth);
+  const padL = lastRes.current.l ? lastRes.current.l + 28 : 28, padR = lastRes.current.r ? lastRes.current.r + 28 : 28;
+  const narrow = lastRes.current.l > 0 || lastRes.current.r > 0; // 이전·다음 카드는 가운데 밖으로 삐져나와서, 양옆에 뭐가 있으면 숨김
+  // 빈 곳·Esc: 고정 안 한 패널 닫고, 단축키로 앞에 올라와 있었으면 다시 앱 창 아래로
+  const closeLoose = () => { change(l => { const n = { ...l }; for (const id of PANELS) if (n[id].open && !n[id].pinned) n[id] = { ...n[id], open: false }; return n; }); invoke("desktop_lower"); };
+  // 노트 패널을 어떤 노트 검색(또는 전체 그래프)으로 열지. 단축키·런처 검색에서 정해 줌
+  const [notesAt, setNotesAt] = useState({ id: "__vault", graph: false, n: 0 });
+  const openPanel = (p: string) => {
+    const id = (p.startsWith("notes") || p === "graph" ? "notes" : p) as PanelId;
+    if (!PANELS.includes(id)) return;
+    if (id === "notes") setNotesAt(o => ({ id: p.startsWith("notes:") ? p.slice(6) : "__vault", graph: p === "graph", n: o.n + 1 }));
+    show(id);
+  };
+  useEffect(() => {
+    const take = () => invoke<string | null>("desktop_take_pending").then(p => { if (p) openPanel(p); });
+    take();
+    const un = listen("open-panel", take);
+    return () => { un.then(f => f()); };
+  }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") closeLoose(); };
-    const resize = () => change(l => { const n = { ...l }; for (const id of PANELS) n[id] = { ...n[id], rect: fit(n[id].rect, area()) }; return n; });
+    const resize = () => change(l => { const n = { ...l }; for (const id of PANELS) n[id] = { ...n[id], rect: fit(n[id].rect, area()) }; return fitAll(n); });
     window.addEventListener("keydown", key); window.addEventListener("resize", resize);
     return () => { window.removeEventListener("keydown", key); window.removeEventListener("resize", resize); };
   }, []);
@@ -82,10 +143,19 @@ export function Desktop() {
   useEffect(() => { if (!msg) return; const t = setTimeout(() => setMsg(null), 4000); return () => clearTimeout(t); }, [msg]);
 
   const list = dayList(data.events, day, today);
-  const cur = list[Math.min(at, list.length - 1)];
+  const pos = Math.max(0, Math.min(at, list.length - 1));
+  const cur = list[pos];
+  // 지금 할 일 제목과 맞는 노트 (그래프에서 진하게). 없으면 전부 같은 밝기
+  const related = useMemo(() => {
+    const hit = cur ? rank(vault, cur.title).slice(0, 40) : [];
+    return hit.length ? new Set(hit.map(d => d.file)) : null;
+  }, [vault, cur?.title]);
   const left = list.filter(e => !e.done).length;
   const week = Array.from({ length: WEEK }, (_, i) => shiftYmd(today, i));
-  const late = data.events.filter(e => (e.end ?? e.start).slice(0, 10) < today && e.done === false).length;
+  const lateList = data.events.filter(e => (e.end ?? e.start).slice(0, 10) < today && e.done === false);
+  const late = lateList.length;
+  // 할 일 화면 "다가오는 일": 고른 날 다음부터 7일 안의 안 한 일
+  const upcoming = data.events.filter(e => e.done !== true && e.start.slice(0, 10) > day && e.start.slice(0, 10) <= shiftYmd(day, WEEK)).slice(0, 6);
   const dbOf = (e: CalEvent) => data.dbs.find(d => d.id === e.db_id);
 
   const toggleDone = async (e: CalEvent) => {
@@ -109,17 +179,17 @@ export function Desktop() {
   const dayName = `${d.getMonth() + 1}월 ${d.getDate()}일 ${DAYS[d.getDay()]}요일`;
   const rel = day === today ? "오늘" : day === shiftYmd(today, 1) ? "내일" : dayName;
   return (
-    <div className="dk" onPointerDown={e => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("dk-center")) closeLoose(); }} style={{ paddingTop: Math.max(availTop, 28) + 14, paddingBottom: Math.max(screen.height - availTop - screen.availHeight, 0) + 18 }}>
+    <div className={`dk ${scr}${note ? " noting" : ""}${narrow ? " narrow" : ""}`} onPointerDown={e => { if (e.target === e.currentTarget || (e.target as HTMLElement).closest(".dk-bgraph")) closeLoose(); }} style={{ paddingTop: Math.max(availTop, 28) + 14, paddingLeft: padL, paddingRight: padR, paddingBottom: Math.max(screen.height - availTop - screen.availHeight, 0) + 18 }}>
       <header className="dk-top dk-glass">
         <div className="dk-days">
           {week.map((w, i) => {
             const n = eventsOn(data.events, w).filter(e => !e.done).length;
             const wd = fromYmd(w).getDay();
             return (
-              <button key={w} className={`dk-day${w === day ? " on" : ""}${wd === 0 ? " sun" : wd === 6 ? " sat" : ""}`} onClick={() => setDay(w)}>
+              <button key={w} className={`dk-day${w === day ? " on" : ""}${w === today ? " today" : ""}${wd === 0 ? " sun" : wd === 6 ? " sat" : ""}`} onClick={() => setDay(w)}>
                 <span className="dk-wd">{i === 0 ? "오늘" : DAYS[wd]}</span>
                 <span className="dk-dn">{+w.slice(8)}</span>
-                <span className="dk-dots">{Array.from({ length: Math.min(n, 4) }, (_, k) => <i key={k} />)}</span>
+                {n > 0 && <span className="dk-dots">{Array.from({ length: Math.min(n, 3) }, (_, k) => <i key={k} />)}</span>}
               </button>
             );
           })}
@@ -133,54 +203,75 @@ export function Desktop() {
         </div>
       </header>
 
-      <main className="dk-center">
-        <section className="dk-card dk-glass">
-          <div className="dk-card-head">
-            <span className="dk-chip">{rel}{rel !== dayName && <em>{dayName}</em>}</span>
-            <span className="dk-count">{list.length ? `남은 ${left} · 전체 ${list.length}` : ""}</span>
-            {list.length > 1 && <span className="dk-nav">
-              <button onClick={() => setAt(a => (a - 1 + list.length) % list.length)} title="이전">‹</button>
-              <span>{Math.min(at, list.length - 1) + 1}/{list.length}</span>
-              <button onClick={() => setAt(a => (a + 1) % list.length)} title="다음">›</button>
-            </span>}
-          </div>
-          {data.error ? <p className="dk-empty">{data.error}</p> : cur ? <>
-            <div className="dk-hero">
-              <span className="dk-when">{cur.start.slice(0, 10) < today ? `밀림 · ${+cur.start.slice(5, 7)}/${+cur.start.slice(8, 10)}` : timeOf(cur)}
-                {cur.end && cur.end.slice(0, 10) !== cur.start.slice(0, 10) && ` ~ ${+cur.end.slice(5, 7)}/${+cur.end.slice(8, 10)}`}</span>
-              <h1 className={cur.done ? "done" : ""}>{cur.title}</h1>
-              <span className="dk-meta"><i style={{ background: cur.color || "var(--accent)" }} />{cur.account} · {cur.db}</span>
+      {/* 바탕 전체: Obsidian 노트 그래프가 천천히 떠다님. 지금 할 일과 관련된 노트는 진하게, 누르면 노트 카드, 두 번 누르면 Obsidian */}
+      <div className="dk-bgraph">
+        <NoteGraph docs={vault} matches={related} selected={note ?? undefined} cacheKey="dk-bg" onSelect={setNote}
+          onOpen={d => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(d.file)}` })} />
+      </div>
+      {/* 고른 노트: 본문을 그대로 읽을 수 있는 카드 (스크롤). 비밀번호가 적힌 노트는 가림 */}
+      {note && <aside className="dk-note dk-glass">
+        <header>
+          <div><b>{note.name}</b><small>{shortDir(note.file)}</small></div>
+          <button className="dk-btn" onClick={() => invoke("open_url", { url: `obsidian://open?path=${encodeURIComponent(note.file)}` })}>Obsidian에서 열기</button>
+          <button className="dk-x" onClick={() => setNote(null)} title="닫기">✕</button>
+        </header>
+        <article className="md dk-note-md" key={note.file} dangerouslySetInnerHTML={{ __html: noteHtml }} />
+      </aside>}
+
+      {scr === "home" ? <main className="dk-center">
+        {/* 히어로: 고른 할 일을 그림 카드에 크게. 양옆에 이전·다음 할 일 카드가 살짝 보임 */}
+        <section className="dk-stage">
+          {list.length > 1 && <>
+            <button className="dk-peek l" onClick={() => setAt(a => (a - 1 + list.length) % list.length)} title="이전 할 일">
+              <span>{list[(pos - 1 + list.length) % list.length].title}</span></button>
+            <button className="dk-peek r" onClick={() => setAt(a => (a + 1) % list.length)} title="다음 할 일">
+              <span>{list[(pos + 1) % list.length].title}</span></button>
+          </>}
+          <article className="dk-hero-card">
+            <div className="dk-hero-top">
+              <span className="dk-chip">{rel}{rel !== dayName && <em>{dayName}</em>}</span>
+              {list.length > 0 && <span className="dk-count">남은 {left} · 전체 {list.length}</span>}
+            </div>
+            {data.error ? <p className="dk-empty">{data.error}</p> : cur ? <>
+              <div className="dk-hero">
+                <span className="dk-when">{rel} · {cur.start.slice(0, 10) < today ? `밀림 · ${+cur.start.slice(5, 7)}/${+cur.start.slice(8, 10)}` : timeOf(cur)}
+                  {cur.end && cur.end.slice(0, 10) !== cur.start.slice(0, 10) && ` ~ ${+cur.end.slice(5, 7)}/${+cur.end.slice(8, 10)}`}</span>
+                <h1 className={cur.done ? "done" : ""}>{cur.title}</h1>
+                <span className="dk-meta"><i style={{ background: cur.color || "var(--accent)" }} />{cur.account} · {cur.db}</span>
+              </div>
               <div className="dk-acts">
-                {cur.done !== null && dbOf(cur)?.done_prop && <button className="dk-btn primary" onClick={() => toggleDone(cur)}>{cur.done ? "완료 취소" : "✓ 완료"}</button>}
+                {cur.done !== null && dbOf(cur)?.done_prop && <button className="dk-btn primary" onClick={() => toggleDone(cur)}>{cur.done ? "완료 취소" : "완료 →"}</button>}
                 <button className="dk-btn" onClick={() => invoke("open_url", { url: cur.url.replace(/^https:\/\//, "notion://") })}>노션에서 열기</button>
               </div>
-            </div>
-            <ul className="dk-list">
-              {list.map((e, i) => (
-                <li key={e.id} className={`${i === at ? "on" : ""}${e.done ? " done" : ""}`} onClick={() => setAt(i)}>
-                  <button className="dk-check" disabled={e.done === null || !dbOf(e)?.done_prop} onClick={ev => { ev.stopPropagation(); toggleDone(e); }}>{e.done ? "✓" : ""}</button>
-                  <span className="dk-lt">{e.title}</span>
-                  <span className="dk-lm">{e.start.slice(0, 10) < today ? "밀림" : timeOf(e)}</span>
-                  <i style={{ background: e.color || "var(--accent)" }} />
-                </li>
-              ))}
-            </ul>
-          </> : <p className="dk-empty">{rel} 할 일이 없어요</p>}
+              {list.length > 1 && <div className="dk-pager">{list.map((e, i) => <button key={e.id} className={i === pos ? "on" : ""} onClick={() => setAt(i)} title={e.title} />)}</div>}
+            </> : <div className="dk-hero"><h1 className="dk-none">{rel} 할 일이 없어요</h1><span className="dk-meta">아래에 적으면 노션에 바로 추가돼요</span></div>}
+          </article>
+        </section>
+
+        <section className="dk-quick dk-glass">
+          <span className="dk-quick-k">빠른 추가</span>
           <input className="dk-add" value={text} placeholder={`${rel}에 할 일 추가 · 예: 3시 회의, 내일 장보기 (Enter)`}
             onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) add(); }} />
+          <button className="dk-btn" onClick={() => go("todo")}>{rel} 계획 보기 →</button>
         </section>
-      </main>
+      </main> : <TodoBoard {...{ list, pos, setAt, cur, today, rel, dayName, left, late: lateList, upcoming, dbOf, toggleDone, error: data.error, setDay, addInput: <><input className="dk-add" value={text} placeholder={`${rel}에 할 일 추가 · 예: 3시 회의, 내일 장보기 (Enter)`}
+            onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) add(); }} /></> }} />}
 
       {PANELS.filter(id => layout[id].open).map(id => (
         <Panel key={id} title={TITLES[id].title} icon={TITLES[id].icon} rect={layout[id].rect} pinned={layout[id].pinned} z={10 + order.indexOf(id)}
-          onRect={r => set(id, { rect: fit(r, area()) }, false)} onDone={() => change(l => l)} onFront={() => front(id)}
+          onRect={r => { setDragging(true); set(id, { rect: fit(r, area()) }, false); }} onDone={() => { setDragging(false); tidy(); }} onFront={() => front(id)}
           onPin={() => set(id, { pinned: !layout[id].pinned })} onClose={() => set(id, { open: false, pinned: false })}
-          onLauncher={() => invoke("open_launcher", { action: id })}>
-          {id === "calendar" ? <CalendarPanel day={day} onDay={setDay} /> : id === "clipboard" ? <ClipPanel onMsg={setMsg} /> : <MemoPanel onMsg={setMsg} />}
+          onLauncher={() => invoke("open_launcher", { action: id === "notes" ? (notesAt.id === "__vault" ? "graph" : `note:${notesAt.id}`) : id === "window" ? "baro" : id })}>
+          {id === "calendar" ? <CalendarPanel day={day} onDay={setDay} /> : id === "clipboard" ? <ClipPanel onMsg={setMsg} />
+            : id === "files" ? <FilesPanel onMsg={setMsg} /> : id === "window" ? <WindowPanel onMsg={setMsg} />
+            : id === "notes" ? <NotesPanel key={notesAt.n} initial={notesAt.id} graph={notesAt.graph} onMsg={setMsg} /> : <MemoPanel onMsg={setMsg} />}
         </Panel>
       ))}
 
       <nav className="dk-dock dk-glass">
+        {SCREENS.map(v => { const Svg = ICONS[v.icon]; return <button key={v.id} className={`dk-scr${scr === v.id ? " on" : ""}`} title={v.label} onClick={() => go(v.id)}>
+          <Svg size={20} strokeWidth={2} /><span>{v.label}</span></button>; })}
+        <span className="dk-sep" />
         {DOCK.map(b => {
           const Svg = ICONS[b.icon];
           const on = b.panel && layout[b.panel].open;

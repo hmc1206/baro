@@ -3,7 +3,7 @@ import {
   AppWindow, Calculator, FolderSearch, Waypoints, Plus, Pin, PinOff, Contrast, Download, ExternalLink, File, FileText, Globe, Keyboard, Lock, Maximize2,
   Moon, PanelBottom, PanelLeft, PanelRight, PanelTop, Power, Puzzle, Search, Settings, ShieldCheck, Sparkles,
   Square, Terminal, TextQuote, Trash2, TriangleAlert, VolumeX, GraduationCap, Circle, CircleDot, CircleCheck,
-  NotebookPen, Lightbulb, CircleAlert, SquareTerminal, ClipboardPaste, CalendarDays, Pause, BookOpenText, ImagePlus, ImageMinus, type LucideIcon,
+  NotebookPen, Lightbulb, CircleAlert, SquareTerminal, ClipboardPaste, CalendarDays, Pause, BookOpenText, ImagePlus, ImageMinus, House, ListChecks, type LucideIcon,
 } from "lucide-react";
 
 export const ICONS: Record<string, LucideIcon> = {
@@ -13,5 +13,5 @@ export const ICONS: Record<string, LucideIcon> = {
   settings: Settings, shield: ShieldCheck, ai: Sparkles, center: Square, terminal: Terminal, snippet: TextQuote,
   trash: Trash2, warn: TriangleAlert, mute: VolumeX,
   curriculum: GraduationCap, todo: Circle, doing: CircleDot, done: CircleCheck,
-  memo: NotebookPen, learn: Lightbulb, stuck: CircleAlert, cmdlog: SquareTerminal, clip: ClipboardPaste, daily: CalendarDays, pause: Pause, notesAi: BookOpenText, image: ImagePlus, imageOff: ImageMinus,
+  memo: NotebookPen, learn: Lightbulb, stuck: CircleAlert, cmdlog: SquareTerminal, clip: ClipboardPaste, daily: CalendarDays, pause: Pause, notesAi: BookOpenText, image: ImagePlus, imageOff: ImageMinus, home: House, tasks: ListChecks,
 };
