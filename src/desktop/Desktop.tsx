@@ -122,10 +122,21 @@ export function Desktop() {
     return () => { window.removeEventListener("keydown", key); window.removeEventListener("resize", resize); };
   }, []);
 
+  // 읽는 범위: 오늘 기준(밀린 일 30일 전 ~ 7일 뒤) + 달력에서 고른 날과 그 뒤 7일("다가오는 일")까지
+  // (예전에는 오늘 기준만 읽어서, 달력에서 먼 날을 고르면 그날 일정이 있어도 "할 일이 없어요"로 나왔음)
+  const dayRef = useRef(day);
+  dayRef.current = day;
+  const loaded = useRef<{ start: string; end: string } | null>(null);
+  const range = (d: string) => {
+    const t = ymd(new Date());
+    const a = shiftYmd(t, -BACK), b = shiftYmd(t, WEEK), c = shiftYmd(d, -1), e = shiftYmd(d, WEEK);
+    return { start: c < a ? c : a, end: e > b ? e : b };
+  };
   const load = () => {
     const my = ++seq.current;
-    const t = ymd(new Date());
-    return invoke<Data>("notion_events", { start: shiftYmd(t, -BACK), end: shiftYmd(t, WEEK), fresh: false })
+    const r = range(dayRef.current);
+    loaded.current = r;
+    return invoke<Data>("notion_events", { ...r, fresh: false })
       .then(d => { if (my === seq.current) setData({ events: d.events, dbs: d.dbs, error: null }); })
       .catch(e => { if (my === seq.current) setData(o => ({ ...o, error: String(e) === "NO_ACCOUNT" ? "노션 계정이 연결되지 않았어요 · 런처의 캘린더에서 연결" : String(e) })); });
   };
@@ -141,6 +152,11 @@ export function Desktop() {
   const prevToday = useRef(today);
   useEffect(() => { if (prevToday.current !== today) { if (day === prevToday.current) setDay(today); prevToday.current = today; load(); } }, [today]);
   useEffect(() => setAt(0), [day]);
+  // 고른 날이 읽어 둔 범위 밖이면 그 날까지 다시 읽기
+  useEffect(() => {
+    const r = range(day), l = loaded.current;
+    if (l && (r.start < l.start || r.end > l.end)) load();
+  }, [day]);
   useEffect(() => { if (!msg) return; const t = setTimeout(() => setMsg(null), 4000); return () => clearTimeout(t); }, [msg]);
 
   const list = dayList(data.events, day, today);
@@ -153,7 +169,7 @@ export function Desktop() {
   }, [vault, cur?.title]);
   const left = list.filter(e => !e.done).length;
   const week = Array.from({ length: WEEK }, (_, i) => shiftYmd(today, i));
-  const lateList = data.events.filter(e => (e.end ?? e.start).slice(0, 10) < today && e.done === false);
+  const lateList = data.events.filter(e => (e.end ?? e.start).slice(0, 10) < today && (e.end ?? e.start).slice(0, 10) >= shiftYmd(today, -BACK) && e.done === false); // 먼 과거 날을 골라 더 읽어도 밀린 일은 30일까지만
   const late = lateList.length;
   // 할 일 화면 "다가오는 일": 고른 날 다음부터 7일 안의 안 한 일
   const upcoming = data.events.filter(e => e.done !== true && e.start.slice(0, 10) > day && e.start.slice(0, 10) <= shiftYmd(day, WEEK)).slice(0, 6);
