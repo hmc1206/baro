@@ -65,6 +65,14 @@ export default function App() {
   // 화면별 상태와 동작: 공부(커리큘럼)·빠른 메모·캘린더·클립보드·파일·스토어·노트 등 (각각 src/app/ 아래 훅)
   const { conc, setConc, reloadDocs, openConcepts, stampStudied, setConceptStatus, setStatus, onPreviewClick: togglePreviewTask, fieldLabel } =
     useStudy({ q, setQ, sel, setSel, setMenu, mode, notes, setNotes, failNote });
+  // 바탕화면 커리큘럼에서 "공부 카드" → 그 커리큘럼을 열고, 단계를 다 읽으면 그 개념의 공부 카드로
+  const [goConcept, setGoConcept] = useState<{ id: string; file: string; heading: string; name: string } | null>(null);
+  useEffect(() => {
+    if (!goConcept || notes.search?.id !== goConcept.id || notes.loading) return;
+    const stage = notes.docs.find(d => d.file === goConcept.file && (d.heading ?? "") === goConcept.heading);
+    setGoConcept(null);
+    if (stage) openConcepts(stage, goConcept.name);
+  }, [goConcept, notes]);
   const memoScr = useMemoScreen({ q, setQ, sel, setSel, mode, enter, input, notes, reloadDocs, conc, stampStudied });
   const { memo, crit, memoHtml, recRef, openMemo, memoItems, onRecClick, shotName, picking } = memoScr;
   const { clips, openClip, clipItems } = useClip({ q, setQ, enter, openMemo });
@@ -157,6 +165,10 @@ export default function App() {
     setMenu(false); setPending(null);
     loadConfig().then(() => setRev(r => r + 1));
     if (action.startsWith("note:")) nv.openNotes(action.slice(5));
+    else if (action.startsWith("concept:")) {
+      // concept:{"id","file","heading","name"} (바탕화면 커리큘럼 → 공부 카드)
+      try { const c = JSON.parse(action.slice(8)); setGoConcept(c); nv.openNotes(c.id); } catch { /* 잘못된 값이면 무시 */ }
+    }
     else if (action === "store") openStore();
     else if (action === "ai") enter("ask");
     else if (action === "graph") nv.openGraph();

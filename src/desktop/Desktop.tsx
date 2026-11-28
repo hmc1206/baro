@@ -12,6 +12,7 @@ import { shortDir } from "../app/filekinds";
 import { type Doc, loadDocs, rank } from "../notes";
 import { Panel } from "./Panel";
 import { TodoBoard } from "./TodoBoard";
+import { CurriculumBoard } from "./CurriculumBoard";
 import { AiPanel, CalendarPanel, ClipPanel, FilesPanel, MemoPanel, NotesPanel, WindowPanel } from "./panels";
 import { type Area, type Layout, type PanelId, type Rect, PANELS, fit, reserve, restore, settle } from "./layout";
 
@@ -37,10 +38,10 @@ const availTop = (screen as Screen & { availTop?: number }).availTop ?? 0;
 const TITLES: Record<PanelId, { title: string; icon: string }> = { calendar: { title: "캘린더", icon: "daily" }, clipboard: { title: "클립보드 기록", icon: "clip" }, memo: { title: "빠른 메모 · 오늘 Daily", icon: "memo" },
   files: { title: "파일 찾기", icon: "folder" }, window: { title: "창 · 시스템", icon: "max" }, notes: { title: "노트 검색 · 그래프", icon: "graph" }, ai: { title: "AI에게 묻기", icon: "ai" } };
 const STORE = "baro.desktop.panels";
-// 바탕화면 화면 두 개: 홈(지금 할 일 하나를 크게) · 할 일(그날 계획 전체). 마지막으로 본 화면을 기억
-type View = "home" | "todo";
+// 바탕화면 화면 세 개: 홈(지금 할 일 하나를 크게) · 할 일(그날 계획 전체) · 커리큘럼(다음 공부·분야별 진행). 마지막으로 본 화면을 기억
+type View = "home" | "todo" | "study";
 const SCREEN_KEY = "baro.desktop.screen";
-const SCREENS: { id: View; icon: string; label: string }[] = [{ id: "home", icon: "home", label: "홈" }, { id: "todo", icon: "tasks", label: "할 일" }];
+const SCREENS: { id: View; icon: string; label: string }[] = [{ id: "home", icon: "home", label: "홈" }, { id: "todo", icon: "tasks", label: "할 일" }, { id: "study", icon: "curriculum", label: "커리큘럼" }];
 // 패널을 둘 수 있는 자리 (메뉴 막대 아래 ~ 독 위)
 const area = (): Area => ({ w: window.innerWidth, h: window.innerHeight, top: Math.max(availTop, 28), bottom: Math.max(screen.height - availTop - screen.availHeight, 0) + 84 });
 const loadLayout = (): Layout => { let v: unknown = null; try { v = JSON.parse(localStorage.getItem(STORE) ?? "null"); } catch { /* 저장된 배치 없음 */ } return restore(v, area()); };
@@ -56,7 +57,7 @@ export function Desktop() {
   const [data, setData] = useState<Data>({ events: [], dbs: [], error: null });
   const [at, setAt] = useState(0); // 카드에 크게 보이는 할 일 (그날 목록의 몇 번째)
   const [text, setText] = useState("");
-  const [scr, setScr] = useState<View>(() => localStorage.getItem(SCREEN_KEY) === "todo" ? "todo" : "home");
+  const [scr, setScr] = useState<View>(() => { const v = localStorage.getItem(SCREEN_KEY); return v === "todo" || v === "study" ? v : "home"; });
   const go = (v: View) => { setScr(v); try { localStorage.setItem(SCREEN_KEY, v); } catch { /* 기억 못 해도 전환은 됨 */ } };
   const [msg, setMsg] = useState<string | null>(null);
   const seq = useRef(0);
@@ -259,7 +260,7 @@ export function Desktop() {
             onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) add(); }} />
           <button className="dk-btn" onClick={() => go("todo")}>{rel} 계획 보기 →</button>
         </section>
-      </main> : <TodoBoard {...{ list, pos, setAt, cur, today, rel, dayName, left, late: lateList, upcoming, dbOf, toggleDone, error: data.error, setDay, calendar: <CalendarPanel day={day} onDay={setDay} />, addInput: <div className="dk-addbox">
+      </main> : scr === "study" ? <CurriculumBoard /> : <TodoBoard {...{ list, pos, setAt, cur, today, rel, dayName, left, late: lateList, upcoming, dbOf, toggleDone, error: data.error, setDay, calendar: <CalendarPanel day={day} onDay={setDay} />, addInput: <div className="dk-addbox">
             <input className="dk-add" value={text} placeholder="할 일 적고 Enter · 날짜·시각은 아래에서"
               onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) add(addDate, addTime, addEnd); }} />
             <div className="dk-addrow">

@@ -642,3 +642,50 @@ textarea.search { resize: none; display: block; line-height: 1.4; font-family: i
 .dk-addrow .dk-btn { flex: none; }
 .dk-tilde { color: var(--muted); font-weight: 650; }
 .dk-addrow { flex-wrap: wrap; }
+
+/* 바탕화면 커리큘럼 화면: 왼쪽 분야별 진행(누르면 단계·개념 펼침), 오른쪽 고른 분야의 다음 할 일·복습 */
+.dk-board.dk-cu { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); grid-template-areas: none; align-content: stretch; height: calc(100vh - 230px); }
+.dk-cu > section, .dk-cu-side > section { min-height: 0; }
+.dk-cu-side { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; min-height: 0; }
+.dk-cu-side > section { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; }
+.dk-cu .dk-rows { max-height: none; }
+.dk-cu .dk-lt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.dk-cu-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-cu-none { margin: 2px 0 8px; font-size: 12.5px; color: var(--muted); }
+.dk-cu-none .dk-link { padding: 0 2px; font-size: 12.5px; }
+.dk-cu-err { margin: 0; font-size: 12px; color: #f0a4a4; white-space: pre-wrap; }
+.dk-cu .dk-box-k .dk-link { margin-left: auto; padding: 0 4px; font-size: 12px; }
+.dk-cu-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; min-height: 0; }
+.dk-cu-list > li { padding: 12px 14px; border-radius: 12px; background: var(--tile); display: flex; flex-direction: column; gap: 8px; cursor: pointer; transition: background-color .15s; }
+.dk-cu-list > li:hover { background: rgba(160,220,205,.1); }
+.dk-cu-list > li.on { cursor: default; background: rgba(160,220,205,.1); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+.dk-cu-head { display: flex; align-items: baseline; gap: 10px; font-size: 14px; }
+.dk-cu-head em { margin-left: auto; font-style: normal; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dk-cu-bar { height: 6px; border-radius: 4px; background: rgba(0,0,0,.3); overflow: hidden; }
+.dk-cu-bar i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .3s; }
+.dk-cu-foot { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.dk-cu-foot span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-cu-foot .dk-link { padding: 2px 6px; font-size: 12px; }
+.dk-cu-stages, .dk-cu-concepts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.dk-cu-stages { margin-top: 4px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.06); }
+.dk-cu-stage, .dk-cu-concepts li { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 9px; font-size: 13px; cursor: pointer; }
+.dk-cu-stage:hover, .dk-cu-concepts li:hover { background: rgba(255,255,255,.05); }
+.dk-cu-stages > li.on > .dk-cu-stage { background: rgba(255,255,255,.06); }
+.dk-cu-stage em { font-style: normal; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dk-cu-concepts { margin: 2px 0 6px 14px; padding-left: 8px; border-left: 1px solid rgba(255,255,255,.08); }
+.dk-cu-concepts li { padding: 5px 10px; font-size: 12.5px; }
+.dk-cu-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-cu-chip { flex: none; padding: 1px 7px; border-radius: 6px; font-size: 10.5px; font-weight: 650; color: var(--muted); background: rgba(0,0,0,.28); }
+.dk-cu-chip.doing { color: var(--accent-ink); background: var(--accent); }
+.dk-cu-chip.done { color: #9fd8b5; background: rgba(120,200,150,.14); }
+.dk-cu-chip.review { color: #f3c98b; background: rgba(240,180,90,.14); }
+.dk-cu .dk-rows li.on, .dk-cu-concepts li.on { background: rgba(160,220,205,.14); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+.dk-cu-focus .dk-box-k { align-items: center; font-size: 15px; }
+.dk-cu-focus .dk-box-k .dk-x { margin-left: auto; }
+.dk-cu-desc { margin: 0; font-size: 12.5px; color: var(--muted); }
+.dk-cu-md { flex: 1; min-height: 0; overflow-y: auto; font-size: 13px; line-height: 1.6; padding-right: 4px; }
+.dk-cu-acts { display: flex; gap: 8px; justify-content: flex-end; }
+.dk-cu-side, .dk-cu-side > section, .dk-cu-fields { min-width: 0; }
+.dk-cu-md { overflow-x: hidden; overflow-wrap: anywhere; }
+.dk-cu-md pre { max-width: 100%; overflow-x: auto; white-space: pre; }
+.dk-cu-md img, .dk-cu-md table { max-width: 100%; }
